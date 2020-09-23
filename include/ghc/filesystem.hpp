@@ -1,36 +1,28 @@
 //---------------------------------------------------------------------------------------
 //
-// ghc::filesystem - A C++17-like filesystem implementation for C++11/C++147/C++17
+// ghc::filesystem - A C++17-like filesystem implementation for C++11/C++14/C++17
 //
 //---------------------------------------------------------------------------------------
 //
 // Copyright (c) 2018, Steffen Schümann <s.schuemann@pobox.com>
-// All rights reserved.
 //
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
 //
-// 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer.
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
 //
-// 2. Redistributions in binary form must reproduce the above copyright notice,
-//    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution.
-//
-// 3. Neither the name of the copyright holder nor the names of its contributors
-//    may be used to endorse or promote products derived from this software without
-//    specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 //
 //---------------------------------------------------------------------------------------
 //
@@ -48,18 +40,37 @@
 #ifndef GHC_FILESYSTEM_H
 #define GHC_FILESYSTEM_H
 
+// #define BSD manifest constant only in
+// sys/param.h
+#ifndef _WIN32
+#include <sys/param.h>
+#endif
+
+#ifndef GHC_OS_DETECTED
 #if defined(__APPLE__) && defined(__MACH__)
 #define GHC_OS_MACOS
 #elif defined(__linux__)
 #define GHC_OS_LINUX
+#if defined(__ANDROID__)
+#define GHC_OS_ANDROID
+#endif
 #elif defined(_WIN64)
 #define GHC_OS_WINDOWS
 #define GHC_OS_WIN64
 #elif defined(_WIN32)
 #define GHC_OS_WINDOWS
 #define GHC_OS_WIN32
+#elif defined(__svr4__)
+#define GHC_OS_SYS5R4
+#elif defined(BSD)
+#define GHC_OS_BSD
+#elif defined(__EMSCRIPTEN__)
+#define GHC_OS_WEB
+#include <wasi/api.h>
 #else
 #error "Operating system currently not supported!"
+#endif
+#define GHC_OS_DETECTED
 #endif
 
 #if defined(GHC_FILESYSTEM_IMPLEMENTATION)
@@ -101,16 +112,24 @@
 #else
 #include <dirent.h>
 #include <fcntl.h>
-#include <langinfo.h>
 #include <sys/param.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
-#if defined(__ANDROID__)
-#define GHC_OS_ANDROID
+#include <limits.h>
+#ifdef GHC_OS_ANDROID
 #include <android/api-level.h>
+#if __ANDROID_API__ < 12
+#include <sys/syscall.h>
+#endif
+#include <sys/vfs.h>
+#define statvfs statfs
+#else
+#include <sys/statvfs.h>
+#endif
+#if !defined(__ANDROID__) || __ANDROID_API__ >= 26
+#include <langinfo.h>
 #endif
 #endif
 #ifdef GHC_OS_MACOS
@@ -166,13 +185,20 @@
 // as ghc::filesystem::string_type.
 // #define GHC_WIN_WSTRING_STRING_TYPE
 //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// Rais errors/exceptions when invalid unicode codepoints or UTF-8 sequences are found,
+// Raise errors/exceptions when invalid unicode codepoints or UTF-8 sequences are found,
 // instead of replacing them with the unicode replacement character (U+FFFD).
 // #define GHC_RAISE_UNICODE_ERRORS
 //- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 // ghc::filesystem version in decimal (major * 10000 + minor * 100 + patch)
-#define GHC_FILESYSTEM_VERSION 10202L
+#define GHC_FILESYSTEM_VERSION 10304L
+
+#if !defined(GHC_WITH_EXCEPTIONS) && (defined(__EXCEPTIONS) || defined(__cpp_exceptions) || defined(_CPPUNWIND))
+#define GHC_WITH_EXCEPTIONS
+#endif
+#if !defined(GHC_WITH_EXCEPTIONS) && defined(GHC_RAISE_UNICODE_ERRORS)
+#error "Can't raise unicode errors whith exception support disabled"
+#endif
 
 namespace ghc {
 namespace filesystem {
@@ -187,24 +213,40 @@ public:
     }
 };
 
-// 30.10.8 class path
-class GHC_FS_API_CLASS path
+template<typename char_type>
+class path_helper_base
 {
 public:
+    using value_type = char_type;
 #ifdef GHC_OS_WINDOWS
-#ifdef GHC_WIN_WSTRING_STRING_TYPE
-#define GHC_USE_WCHAR_T
-    using value_type = std::wstring::value_type;
-#else
-    using value_type = std::string::value_type;
-#endif
-    using string_type = std::basic_string<value_type>;
     static constexpr value_type preferred_separator = '\\';
 #else
-    using value_type = std::string::value_type;
-    using string_type = std::basic_string<value_type>;
     static constexpr value_type preferred_separator = '/';
 #endif
+};
+
+#if  __cplusplus < 201703L
+template <typename char_type>
+constexpr char_type path_helper_base<char_type>::preferred_separator;
+#endif
+    
+// 30.10.8 class path
+class GHC_FS_API_CLASS path
+#if defined(GHC_OS_WINDOWS) && defined(GHC_WIN_WSTRING_STRING_TYPE)
+#define GHC_USE_WCHAR_T
+    : private path_helper_base<std::wstring::value_type>
+{
+public:
+    using path_helper_base<std::wstring::value_type>::value_type;
+#else
+    : private path_helper_base<std::string::value_type>
+{
+public:
+    using path_helper_base<std::string::value_type>::value_type;
+#endif
+    using string_type = std::basic_string<value_type>;
+    using path_helper_base<value_type>::preferred_separator;
+    
     // 30.10.10.1 enumeration format
     /// The path format in wich the constructor argument is given.
     enum format {
@@ -254,10 +296,12 @@ public:
     path(const Source& source, format fmt = auto_format);
     template <class InputIterator>
     path(InputIterator first, InputIterator last, format fmt = auto_format);
+#ifdef GHC_WITH_EXCEPTIONS
     template <class Source, typename = path_from_string<Source>>
     path(const Source& source, const std::locale& loc, format fmt = auto_format);
     template <class InputIterator>
     path(InputIterator first, InputIterator last, const std::locale& loc, format fmt = auto_format);
+#endif
     ~path();
 
     // 30.10.8.4.2 assignments
@@ -549,7 +593,9 @@ enum class copy_options : uint16_t {
 
     directories_only = 0x40,
     create_symlinks = 0x80,
+#ifndef GHC_OS_WEB
     create_hard_links = 0x100
+#endif
 };
 
 enum class directory_options : uint16_t {
@@ -593,7 +639,9 @@ public:
     directory_entry() noexcept = default;
     directory_entry(const directory_entry&) = default;
     directory_entry(directory_entry&&) noexcept = default;
+#ifdef GHC_WITH_EXCEPTIONS
     explicit directory_entry(const path& p);
+#endif
     directory_entry(const path& p, std::error_code& ec);
     ~directory_entry();
 
@@ -602,45 +650,83 @@ public:
     directory_entry& operator=(directory_entry&&) noexcept = default;
 
     // 30.10.12.2 modifiers
+#ifdef GHC_WITH_EXCEPTIONS
     void assign(const path& p);
+#endif
     void assign(const path& p, std::error_code& ec);
+#ifdef GHC_WITH_EXCEPTIONS
     void replace_filename(const path& p);
+#endif
     void replace_filename(const path& p, std::error_code& ec);
+#ifdef GHC_WITH_EXCEPTIONS
     void refresh();
+#endif
     void refresh(std::error_code& ec) noexcept;
 
     // 30.10.12.3 observers
     const filesystem::path& path() const noexcept;
     operator const filesystem::path&() const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool exists() const;
+#endif
     bool exists(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_block_file() const;
+#endif
     bool is_block_file(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_character_file() const;
+#endif
     bool is_character_file(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_directory() const;
+#endif
     bool is_directory(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_fifo() const;
+#endif
     bool is_fifo(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_other() const;
+#endif
     bool is_other(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_regular_file() const;
+#endif
     bool is_regular_file(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_socket() const;
+#endif
     bool is_socket(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     bool is_symlink() const;
+#endif
     bool is_symlink(std::error_code& ec) const noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     uintmax_t file_size() const;
+#endif
     uintmax_t file_size(std::error_code& ec) const noexcept;
+
+#ifndef GHC_OS_WEB
+#ifdef GHC_WITH_EXCEPTIONS
     uintmax_t hard_link_count() const;
+#endif
     uintmax_t hard_link_count(std::error_code& ec) const noexcept;
+#endif
+
+#ifdef GHC_WITH_EXCEPTIONS
     file_time_type last_write_time() const;
+#endif
     file_time_type last_write_time(std::error_code& ec) const noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
     file_status status() const;
+#endif
     file_status status(std::error_code& ec) const noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
     file_status symlink_status() const;
+#endif
     file_status symlink_status(std::error_code& ec) const noexcept;
     bool operator<(const directory_entry& rhs) const noexcept;
     bool operator==(const directory_entry& rhs) const noexcept;
@@ -656,7 +742,7 @@ private:
     file_status _symlink_status;
     uintmax_t _file_size = 0;
 #ifndef GHC_OS_WINDOWS
-    uintmax_t _hard_link_count;
+    uintmax_t _hard_link_count = 0;
 #endif
     time_t _last_write_time = 0;
 };
@@ -688,8 +774,10 @@ public:
 
     // 30.10.13.1 member functions
     directory_iterator() noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     explicit directory_iterator(const path& p);
     directory_iterator(const path& p, directory_options options);
+#endif
     directory_iterator(const path& p, std::error_code& ec) noexcept;
     directory_iterator(const path& p, directory_options options, std::error_code& ec) noexcept;
     directory_iterator(const directory_iterator& rhs);
@@ -699,16 +787,20 @@ public:
     directory_iterator& operator=(directory_iterator&& rhs) noexcept;
     const directory_entry& operator*() const;
     const directory_entry* operator->() const;
+#ifdef GHC_WITH_EXCEPTIONS
     directory_iterator& operator++();
+#endif
     directory_iterator& increment(std::error_code& ec) noexcept;
 
     // other members as required by 27.2.3, input iterators
+#ifdef GHC_WITH_EXCEPTIONS
     proxy operator++(int)
     {
-        proxy proxy{**this};
+        proxy p{**this};
         ++*this;
-        return proxy;
+        return p;
     }
+#endif
     bool operator==(const directory_iterator& rhs) const;
     bool operator!=(const directory_iterator& rhs) const;
 
@@ -734,8 +826,10 @@ public:
 
     // 30.10.14.1 constructors and destructor
     recursive_directory_iterator() noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     explicit recursive_directory_iterator(const path& p);
     recursive_directory_iterator(const path& p, directory_options options);
+#endif
     recursive_directory_iterator(const path& p, directory_options options, std::error_code& ec) noexcept;
     recursive_directory_iterator(const path& p, std::error_code& ec) noexcept;
     recursive_directory_iterator(const recursive_directory_iterator& rhs);
@@ -753,20 +847,26 @@ public:
     // 30.10.14.1 modifiers recursive_directory_iterator&
     recursive_directory_iterator& operator=(const recursive_directory_iterator& rhs);
     recursive_directory_iterator& operator=(recursive_directory_iterator&& rhs) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
     recursive_directory_iterator& operator++();
+#endif
     recursive_directory_iterator& increment(std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
     void pop();
+#endif
     void pop(std::error_code& ec);
     void disable_recursion_pending();
 
     // other members as required by 27.2.3, input iterators
+#ifdef GHC_WITH_EXCEPTIONS
     directory_iterator::proxy operator++(int)
     {
         directory_iterator::proxy proxy{**this};
         ++*this;
         return proxy;
     }
+#endif
     bool operator==(const recursive_directory_iterator& rhs) const;
     bool operator!=(const recursive_directory_iterator& rhs) const;
 
@@ -790,135 +890,225 @@ GHC_FS_API recursive_directory_iterator begin(recursive_directory_iterator iter)
 GHC_FS_API recursive_directory_iterator end(const recursive_directory_iterator&) noexcept;
 
 // 30.10.15 filesystem operations
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path absolute(const path& p);
+#endif
 GHC_FS_API path absolute(const path& p, std::error_code& ec);
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path canonical(const path& p);
+#endif
 GHC_FS_API path canonical(const path& p, std::error_code& ec);
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void copy(const path& from, const path& to);
+#endif
 GHC_FS_API void copy(const path& from, const path& to, std::error_code& ec) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void copy(const path& from, const path& to, copy_options options);
+#endif
 GHC_FS_API void copy(const path& from, const path& to, copy_options options, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool copy_file(const path& from, const path& to);
+#endif
 GHC_FS_API bool copy_file(const path& from, const path& to, std::error_code& ec) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool copy_file(const path& from, const path& to, copy_options option);
+#endif
 GHC_FS_API bool copy_file(const path& from, const path& to, copy_options option, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void copy_symlink(const path& existing_symlink, const path& new_symlink);
+#endif
 GHC_FS_API void copy_symlink(const path& existing_symlink, const path& new_symlink, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool create_directories(const path& p);
+#endif
 GHC_FS_API bool create_directories(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool create_directory(const path& p);
+#endif
 GHC_FS_API bool create_directory(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool create_directory(const path& p, const path& attributes);
+#endif
 GHC_FS_API bool create_directory(const path& p, const path& attributes, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void create_directory_symlink(const path& to, const path& new_symlink);
+#endif
 GHC_FS_API void create_directory_symlink(const path& to, const path& new_symlink, std::error_code& ec) noexcept;
 
+#ifndef GHC_OS_WEB
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void create_hard_link(const path& to, const path& new_hard_link);
+#endif
 GHC_FS_API void create_hard_link(const path& to, const path& new_hard_link, std::error_code& ec) noexcept;
+#endif
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void create_symlink(const path& to, const path& new_symlink);
+#endif
 GHC_FS_API void create_symlink(const path& to, const path& new_symlink, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path current_path();
+#endif
 GHC_FS_API path current_path(std::error_code& ec);
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void current_path(const path& p);
+#endif
 GHC_FS_API void current_path(const path& p, std::error_code& ec) noexcept;
 
 GHC_FS_API bool exists(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool exists(const path& p);
+#endif
 GHC_FS_API bool exists(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool equivalent(const path& p1, const path& p2);
+#endif
 GHC_FS_API bool equivalent(const path& p1, const path& p2, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API uintmax_t file_size(const path& p);
+#endif
 GHC_FS_API uintmax_t file_size(const path& p, std::error_code& ec) noexcept;
 
+#ifndef GHC_OS_WEB
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API uintmax_t hard_link_count(const path& p);
+#endif
 GHC_FS_API uintmax_t hard_link_count(const path& p, std::error_code& ec) noexcept;
+#endif
 
 GHC_FS_API bool is_block_file(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_block_file(const path& p);
+#endif
 GHC_FS_API bool is_block_file(const path& p, std::error_code& ec) noexcept;
 GHC_FS_API bool is_character_file(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_character_file(const path& p);
+#endif
 GHC_FS_API bool is_character_file(const path& p, std::error_code& ec) noexcept;
 GHC_FS_API bool is_directory(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_directory(const path& p);
+#endif
 GHC_FS_API bool is_directory(const path& p, std::error_code& ec) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_empty(const path& p);
+#endif
 GHC_FS_API bool is_empty(const path& p, std::error_code& ec) noexcept;
 GHC_FS_API bool is_fifo(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_fifo(const path& p);
+#endif
 GHC_FS_API bool is_fifo(const path& p, std::error_code& ec) noexcept;
 GHC_FS_API bool is_other(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_other(const path& p);
+#endif
 GHC_FS_API bool is_other(const path& p, std::error_code& ec) noexcept;
 GHC_FS_API bool is_regular_file(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_regular_file(const path& p);
+#endif
 GHC_FS_API bool is_regular_file(const path& p, std::error_code& ec) noexcept;
 GHC_FS_API bool is_socket(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_socket(const path& p);
+#endif
 GHC_FS_API bool is_socket(const path& p, std::error_code& ec) noexcept;
 GHC_FS_API bool is_symlink(file_status s) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool is_symlink(const path& p);
+#endif
 GHC_FS_API bool is_symlink(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API file_time_type last_write_time(const path& p);
+#endif
 GHC_FS_API file_time_type last_write_time(const path& p, std::error_code& ec) noexcept;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void last_write_time(const path& p, file_time_type new_time);
+#endif
 GHC_FS_API void last_write_time(const path& p, file_time_type new_time, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void permissions(const path& p, perms prms, perm_options opts = perm_options::replace);
+#endif
 GHC_FS_API void permissions(const path& p, perms prms, std::error_code& ec) noexcept;
 GHC_FS_API void permissions(const path& p, perms prms, perm_options opts, std::error_code& ec);
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path proximate(const path& p, std::error_code& ec);
 GHC_FS_API path proximate(const path& p, const path& base = current_path());
+#endif
 GHC_FS_API path proximate(const path& p, const path& base, std::error_code& ec);
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path read_symlink(const path& p);
+#endif
 GHC_FS_API path read_symlink(const path& p, std::error_code& ec);
 
 GHC_FS_API path relative(const path& p, std::error_code& ec);
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path relative(const path& p, const path& base = current_path());
+#endif
 GHC_FS_API path relative(const path& p, const path& base, std::error_code& ec);
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API bool remove(const path& p);
+#endif
 GHC_FS_API bool remove(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API uintmax_t remove_all(const path& p);
+#endif
 GHC_FS_API uintmax_t remove_all(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void rename(const path& from, const path& to);
+#endif
 GHC_FS_API void rename(const path& from, const path& to, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API void resize_file(const path& p, uintmax_t size);
+#endif
 GHC_FS_API void resize_file(const path& p, uintmax_t size, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API space_info space(const path& p);
+#endif
 GHC_FS_API space_info space(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API file_status status(const path& p);
+#endif
 GHC_FS_API file_status status(const path& p, std::error_code& ec) noexcept;
 
 GHC_FS_API bool status_known(file_status s) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API file_status symlink_status(const path& p);
+#endif
 GHC_FS_API file_status symlink_status(const path& p, std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path temp_directory_path();
+#endif
 GHC_FS_API path temp_directory_path(std::error_code& ec) noexcept;
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_FS_API path weakly_canonical(const path& p);
+#endif
 GHC_FS_API path weakly_canonical(const path& p, std::error_code& ec) noexcept;
 
 // Non-C++17 add-on std::fstream wrappers with path
@@ -932,7 +1122,7 @@ public:
     const basic_filebuf& operator=(const basic_filebuf&) = delete;
     basic_filebuf<charT, traits>* open(const path& p, std::ios_base::openmode mode)
     {
-#if defined(GHC_OS_WINDOWS) && !defined(__GNUC__)
+#if defined(GHC_OS_WINDOWS) && !defined(__GLIBCXX__)
         return std::basic_filebuf<charT, traits>::open(p.wstring().c_str(), mode) ? this : 0;
 #else
         return std::basic_filebuf<charT, traits>::open(p.string().c_str(), mode) ? this : 0;
@@ -945,7 +1135,7 @@ class basic_ifstream : public std::basic_ifstream<charT, traits>
 {
 public:
     basic_ifstream() {}
-#if defined(GHC_OS_WINDOWS) && !defined(__GNUC__)
+#if defined(GHC_OS_WINDOWS) && !defined(__GLIBCXX__)
     explicit basic_ifstream(const path& p, std::ios_base::openmode mode = std::ios_base::in)
         : std::basic_ifstream<charT, traits>(p.wstring().c_str(), mode)
     {
@@ -968,7 +1158,7 @@ class basic_ofstream : public std::basic_ofstream<charT, traits>
 {
 public:
     basic_ofstream() {}
-#if defined(GHC_OS_WINDOWS) && !defined(__GNUC__)
+#if defined(GHC_OS_WINDOWS) && !defined(__GLIBCXX__)
     explicit basic_ofstream(const path& p, std::ios_base::openmode mode = std::ios_base::out)
         : std::basic_ofstream<charT, traits>(p.wstring().c_str(), mode)
     {
@@ -991,7 +1181,7 @@ class basic_fstream : public std::basic_fstream<charT, traits>
 {
 public:
     basic_fstream() {}
-#if defined(GHC_OS_WINDOWS) && !defined(__GNUC__)
+#if defined(GHC_OS_WINDOWS) && !defined(__GLIBCXX__)
     explicit basic_fstream(const path& p, std::ios_base::openmode mode = std::ios_base::in | std::ios_base::out)
         : std::basic_fstream<charT, traits>(p.wstring().c_str(), mode)
     {
@@ -1064,6 +1254,11 @@ enum class portable_error {
     is_a_directory,
 };
 GHC_FS_API std::error_code make_error_code(portable_error err);
+#ifdef GHC_OS_WINDOWS
+GHC_FS_API std::error_code make_system_error(uint32_t err = 0);
+#else
+GHC_FS_API std::error_code make_system_error(int err = 0);
+#endif
 }  // namespace detail
 
 namespace detail {
@@ -1114,6 +1309,18 @@ GHC_INLINE std::error_code make_error_code(portable_error err)
     return std::error_code();
 }
 
+#ifdef GHC_OS_WINDOWS
+GHC_INLINE std::error_code make_system_error(uint32_t err)
+{
+    return std::error_code(err ? static_cast<int>(err) : static_cast<int>(::GetLastError()), std::system_category());
+}
+#else
+GHC_INLINE std::error_code make_system_error(int err)
+{
+    return std::error_code(err ? err : errno, std::system_category());
+}
+#endif
+    
 #endif  // GHC_EXPAND_IMPL
 
 template <typename Enum>
@@ -1175,7 +1382,7 @@ namespace detail {
 
 GHC_INLINE bool in_range(uint32_t c, uint32_t lo, uint32_t hi)
 {
-    return ((uint32_t)(c - lo) < (hi - lo + 1));
+    return (static_cast<uint32_t>(c - lo) < (hi - lo + 1));
 }
 
 GHC_INLINE bool is_surrogate(uint32_t c)
@@ -1233,7 +1440,7 @@ GHC_INLINE unsigned consumeUtf8Fragment(const unsigned state, const uint8_t frag
         0x88888880u, 0x22818108u, 0x88888881u, 0x88888882u, 0x88888884u, 0x88888887u, 0x88888886u, 0x82218108u, 0x82281108u, 0x88888888u, 0x88888883u, 0x88888885u, 0u,          0u,          0u,          0u,
     };
     uint8_t category = fragment < 128 ? 0 : (utf8_state_info[(fragment >> 3) & 0xf] >> ((fragment & 7) << 2)) & 0xf;
-    codepoint = (state ? (codepoint << 6) | (fragment & 0x3f) : (0xff >> category) & fragment);
+    codepoint = (state ? (codepoint << 6) | (fragment & 0x3fu) : (0xffu >> category) & fragment);
     return state == S_RJCT ? static_cast<unsigned>(S_RJCT) : static_cast<unsigned>((utf8_state_info[category + 16] >> (state << 2)) & 0xf);
 }
     
@@ -1243,7 +1450,7 @@ GHC_INLINE bool validUtf8(const std::string& utf8String)
     unsigned utf8_state = S_STRT;
     std::uint32_t codepoint = 0;
     while (iter < utf8String.end()) {
-        if ((utf8_state = consumeUtf8Fragment(utf8_state, (uint8_t)*iter++, codepoint)) == S_RJCT) {
+        if ((utf8_state = consumeUtf8Fragment(utf8_state, static_cast<uint8_t>(*iter++), codepoint)) == S_RJCT) {
             return false;
         }
     }
@@ -1274,14 +1481,14 @@ inline StringType fromUtf8(const std::string& utf8String, const typename StringT
     unsigned utf8_state = S_STRT;
     std::uint32_t codepoint = 0;
     while (iter < utf8String.end()) {
-        if ((utf8_state = consumeUtf8Fragment(utf8_state, (uint8_t)*iter++, codepoint)) == S_STRT) {
+        if ((utf8_state = consumeUtf8Fragment(utf8_state, static_cast<uint8_t>(*iter++), codepoint)) == S_STRT) {
             if (codepoint <= 0xffff) {
-                result += (typename StringType::value_type)codepoint;
+                result += static_cast<typename StringType::value_type>(codepoint);
             }
             else {
                 codepoint -= 0x10000;
-                result += (typename StringType::value_type)((codepoint >> 10) + 0xd800);
-                result += (typename StringType::value_type)((codepoint & 0x3ff) + 0xdc00);
+                result += static_cast<typename StringType::value_type>((codepoint >> 10) + 0xd800);
+                result += static_cast<typename StringType::value_type>((codepoint & 0x3ff) + 0xdc00);
             }
             codepoint = 0;
         }
@@ -1289,7 +1496,7 @@ inline StringType fromUtf8(const std::string& utf8String, const typename StringT
 #ifdef GHC_RAISE_UNICODE_ERRORS
             throw filesystem_error("Illegal byte sequence for unicode character.", utf8String, std::make_error_code(std::errc::illegal_byte_sequence));
 #else
-            result += (typename StringType::value_type)0xfffd;
+            result += static_cast<typename StringType::value_type>(0xfffd);
             utf8_state = S_STRT;
             codepoint = 0;
 #endif
@@ -1299,7 +1506,7 @@ inline StringType fromUtf8(const std::string& utf8String, const typename StringT
 #ifdef GHC_RAISE_UNICODE_ERRORS
         throw filesystem_error("Illegal byte sequence for unicode character.", utf8String, std::make_error_code(std::errc::illegal_byte_sequence));
 #else
-        result += (typename StringType::value_type)0xfffd;
+        result += static_cast<typename StringType::value_type>(0xfffd);
 #endif
     }
     return result;
@@ -1314,15 +1521,15 @@ inline StringType fromUtf8(const std::string& utf8String, const typename StringT
     unsigned utf8_state = S_STRT;
     std::uint32_t codepoint = 0;
     while (iter < utf8String.end()) {
-        if ((utf8_state = consumeUtf8Fragment(utf8_state, (uint8_t)*iter++, codepoint)) == S_STRT) {
-            result += codepoint;
+        if ((utf8_state = consumeUtf8Fragment(utf8_state, static_cast<uint8_t>(*iter++), codepoint)) == S_STRT) {
+            result += static_cast<typename StringType::value_type>(codepoint);
             codepoint = 0;
         }
         else if (utf8_state == S_RJCT) {
 #ifdef GHC_RAISE_UNICODE_ERRORS
             throw filesystem_error("Illegal byte sequence for unicode character.", utf8String, std::make_error_code(std::errc::illegal_byte_sequence));
 #else
-            result += (typename StringType::value_type)0xfffd;
+            result += static_cast<typename StringType::value_type>(0xfffd);
             utf8_state = S_STRT;
             codepoint = 0;
 #endif
@@ -1332,7 +1539,7 @@ inline StringType fromUtf8(const std::string& utf8String, const typename StringT
 #ifdef GHC_RAISE_UNICODE_ERRORS
         throw filesystem_error("Illegal byte sequence for unicode character.", utf8String, std::make_error_code(std::errc::illegal_byte_sequence));
 #else
-        result += (typename StringType::value_type)0xfffd;
+        result += static_cast<typename StringType::value_type>(0xfffd);
 #endif
     }
     return result;
@@ -1378,7 +1585,7 @@ inline std::string toUtf8(const std::basic_string<charT, traits, Alloc>& unicode
 {
     std::string result;
     for (auto c : unicodeString) {
-        appendUTF8(result, c);
+        appendUTF8(result, static_cast<uint32_t>(c));
     }
     return result;
 }
@@ -1475,6 +1682,23 @@ inline path::path(const std::u32string& source, format fmt)
     postprocess_path_with_format(_path, fmt);
 }
 
+#ifdef __cpp_lib_string_view
+template <>
+inline path::path(const std::string_view& source, format fmt)
+{
+    _path = detail::toUtf8(std::string(source));
+    postprocess_path_with_format(_path, fmt);
+}
+#ifdef GHC_USE_WCHAR_T
+template <>
+inline path::path(const std::wstring_view& source, format fmt)
+{
+    _path = detail::toUtf8(std::wstring(source).c_str());
+    postprocess_path_with_format(_path, fmt);
+}
+#endif
+#endif
+
 template <class Source, typename>
 inline path u8path(const Source& source)
 {
@@ -1532,7 +1756,7 @@ GHC_INLINE std::string systemErrorText(ErrorNumber code = 0)
 {
 #if defined(GHC_OS_WINDOWS)
     LPVOID msgBuf;
-    DWORD dw = code ? code : ::GetLastError();
+    DWORD dw = code ? static_cast<DWORD>(code) : ::GetLastError();
     FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, dw, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPWSTR)&msgBuf, 0, NULL);
     std::string msg = toUtf8(std::wstring((LPWSTR)msgBuf));
     LocalFree(msgBuf);
@@ -1555,47 +1779,63 @@ GHC_INLINE void create_symlink(const path& target_name, const path& new_symlink,
         ec = detail::make_error_code(detail::portable_error::not_supported);
         return;
     }
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
     static CreateSymbolicLinkW_fp api_call = reinterpret_cast<CreateSymbolicLinkW_fp>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateSymbolicLinkW"));
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic pop
+#endif
     if (api_call) {
         if (api_call(detail::fromUtf8<std::wstring>(new_symlink.u8string()).c_str(), detail::fromUtf8<std::wstring>(target_name.u8string()).c_str(), to_directory ? 1 : 0) == 0) {
             auto result = ::GetLastError();
             if (result == ERROR_PRIVILEGE_NOT_HELD && api_call(detail::fromUtf8<std::wstring>(new_symlink.u8string()).c_str(), detail::fromUtf8<std::wstring>(target_name.u8string()).c_str(), to_directory ? 3 : 2) != 0) {
                 return;
             }
-            ec = std::error_code(result, std::system_category());
+            ec = detail::make_system_error(result);
         }
     }
     else {
-        ec = std::error_code(ERROR_NOT_SUPPORTED, std::system_category());
+        ec = detail::make_system_error(ERROR_NOT_SUPPORTED);
     }
 }
 
 GHC_INLINE void create_hardlink(const path& target_name, const path& new_hardlink, std::error_code& ec)
 {
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
     static CreateHardLinkW_fp api_call = reinterpret_cast<CreateHardLinkW_fp>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateHardLinkW"));
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic pop
+#endif
     if (api_call) {
         if (api_call(detail::fromUtf8<std::wstring>(new_hardlink.u8string()).c_str(), detail::fromUtf8<std::wstring>(target_name.u8string()).c_str(), NULL) == 0) {
-            ec = std::error_code(::GetLastError(), std::system_category());
+            ec = detail::make_system_error();
         }
     }
     else {
-        ec = std::error_code(ERROR_NOT_SUPPORTED, std::system_category());
+        ec = detail::make_system_error(ERROR_NOT_SUPPORTED);
     }
 }
 #else
 GHC_INLINE void create_symlink(const path& target_name, const path& new_symlink, bool, std::error_code& ec)
 {
     if (::symlink(target_name.c_str(), new_symlink.c_str()) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
     }
 }
 
+#ifndef GHC_OS_WEB
 GHC_INLINE void create_hardlink(const path& target_name, const path& new_hardlink, std::error_code& ec)
 {
     if (::link(target_name.c_str(), new_hardlink.c_str()) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
     }
 }
+#endif
 #endif
 
 template <typename T>
@@ -1683,7 +1923,7 @@ GHC_INLINE path resolveSymlink(const path& p, std::error_code& ec)
 
     std::shared_ptr<void> file(CreateFileW(p.wstring().c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, 0), CloseHandle);
     if (file.get() == INVALID_HANDLE_VALUE) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return path();
     }
 
@@ -1705,20 +1945,20 @@ GHC_INLINE path resolveSymlink(const path& p, std::error_code& ec)
         }
     }
     else {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
     return result;
 #else
     size_t bufferSize = 256;
     while (true) {
-        std::vector<char> buffer(bufferSize, (char)0);
+        std::vector<char> buffer(bufferSize, static_cast<char>(0));
         auto rc = ::readlink(p.c_str(), buffer.data(), buffer.size());
         if (rc < 0) {
-            ec = std::error_code(errno, std::system_category());
+            ec = detail::make_system_error();
             return path();
         }
         else if (rc < static_cast<int>(bufferSize)) {
-            return path(std::string(buffer.data(), rc));
+            return path(std::string(buffer.data(), static_cast<std::string::size_type>(rc)));
         }
         bufferSize *= 2;
     }
@@ -1732,15 +1972,15 @@ GHC_INLINE time_t timeFromFILETIME(const FILETIME& ft)
     ULARGE_INTEGER ull;
     ull.LowPart = ft.dwLowDateTime;
     ull.HighPart = ft.dwHighDateTime;
-    return ull.QuadPart / 10000000ULL - 11644473600ULL;
+    return static_cast<time_t>(ull.QuadPart / 10000000ULL - 11644473600ULL);
 }
 
 GHC_INLINE void timeToFILETIME(time_t t, FILETIME& ft)
 {
     LONGLONG ll;
     ll = Int32x32To64(t, 10000000) + 116444736000000000;
-    ft.dwLowDateTime = (DWORD)ll;
-    ft.dwHighDateTime = ll >> 32;
+    ft.dwLowDateTime = static_cast<DWORD>(ll);
+    ft.dwHighDateTime = static_cast<DWORD>(ll >> 32);
 }
 
 template <typename INFO>
@@ -1756,7 +1996,7 @@ GHC_INLINE uintmax_t hard_links_from_INFO<BY_HANDLE_FILE_INFORMATION>(const BY_H
 }
 
 template <typename INFO>
-GHC_INLINE file_status status_from_INFO(const path& p, const INFO* info, std::error_code& ec, uintmax_t* sz = nullptr, time_t* lwt = nullptr) noexcept
+GHC_INLINE file_status status_from_INFO(const path& p, const INFO* info, std::error_code&, uintmax_t* sz = nullptr, time_t* lwt = nullptr) noexcept
 {
     file_type ft = file_type::unknown;
     if ((info->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
@@ -1804,7 +2044,7 @@ GHC_INLINE file_status symlink_status_ex(const path& p, std::error_code& ec, uin
     file_status fs;
     WIN32_FILE_ATTRIBUTE_DATA attr;
     if (!GetFileAttributesExW(detail::fromUtf8<std::wstring>(p.u8string()).c_str(), GetFileExInfoStandard, &attr)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
     else {
         ec.clear();
@@ -1831,7 +2071,7 @@ GHC_INLINE file_status symlink_status_ex(const path& p, std::error_code& ec, uin
         file_status f_s = detail::file_status_from_st_mode(fs.st_mode);
         return f_s;
     }
-    ec = std::error_code(errno, std::system_category());
+    ec = detail::make_system_error();
     if (detail::is_not_found_error(ec)) {
         return file_status(file_type::not_found, perms::unknown);
     }
@@ -1844,12 +2084,12 @@ GHC_INLINE file_status status_ex(const path& p, std::error_code& ec, file_status
     ec.clear();
 #ifdef GHC_OS_WINDOWS
     if (recurse_count > 16) {
-        ec = std::error_code(0x2A9 /*ERROR_STOPPED_ON_SYMLINK*/, std::system_category());
+        ec = detail::make_system_error(0x2A9 /*ERROR_STOPPED_ON_SYMLINK*/);
         return file_status(file_type::unknown);
     }
     WIN32_FILE_ATTRIBUTE_DATA attr;
     if (!::GetFileAttributesExW(p.wstring().c_str(), GetFileExInfoStandard, &attr)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
     else if (attr.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
         path target = resolveSymlink(p, ec);
@@ -1889,7 +2129,7 @@ GHC_INLINE file_status status_ex(const path& p, std::error_code& ec, file_status
             }
         }
         if (sz) {
-            *sz = st.st_size;
+            *sz = static_cast<uintmax_t>(st.st_size);
         }
         if (nhl) {
             *nhl = st.st_nlink;
@@ -1900,7 +2140,7 @@ GHC_INLINE file_status status_ex(const path& p, std::error_code& ec, file_status
         return fs;
     }
     else {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
         if (detail::is_not_found_error(ec)) {
             return file_status(file_type::not_found, perms::unknown);
         }
@@ -1921,8 +2161,8 @@ GHC_INLINE u8arguments::u8arguments(int& argc, char**& argv)
 #ifdef GHC_OS_WINDOWS
     LPWSTR* p;
     p = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
-    _args.reserve(argc);
-    _argp.reserve(argc);
+    _args.reserve(static_cast<size_t>(argc));
+    _argp.reserve(static_cast<size_t>(argc));
     for (size_t i = 0; i < static_cast<size_t>(argc); ++i) {
         _args.push_back(detail::toUtf8(std::wstring(p[i])));
         _argp.push_back((char*)_args[i].data());
@@ -1969,6 +2209,7 @@ GHC_INLINE path::path(string_type&& source, format fmt)
 
 #endif  // GHC_EXPAND_IMPL
 
+#ifdef GHC_WITH_EXCEPTIONS
 template <class Source, typename>
 inline path::path(const Source& source, const std::locale& loc, format fmt)
     : path(source, fmt)
@@ -1988,6 +2229,7 @@ inline path::path(InputIterator first, InputIterator last, const std::locale& lo
         throw filesystem_error("This implementation only supports UTF-8 locales!", path(_path), detail::make_error_code(detail::portable_error::not_supported));
     }
 }
+#endif
 
 #ifdef GHC_EXPAND_IMPL
 
@@ -2464,7 +2706,7 @@ GHC_INLINE path path::parent_path() const
         }
         else {
             path pp;
-            for (const string_type& s : input_iterator_range<iterator>(begin(), --end())) {
+            for (string_type s : input_iterator_range<iterator>(begin(), --end())) {
                 if (s == "/") {
                     // don't use append to join a path-
                     pp += s;
@@ -2490,12 +2732,12 @@ GHC_INLINE path path::stem() const
 {
     impl_string_type fn = filename().string();
     if (fn != "." && fn != "..") {
-        impl_string_type::size_type n = fn.rfind(".");
+        impl_string_type::size_type n = fn.rfind('.');
         if (n != impl_string_type::npos && n != 0) {
-            return fn.substr(0, n);
+            return path{fn.substr(0, n)};
         }
     }
-    return fn;
+    return path{fn};
 }
 
 GHC_INLINE path path::extension() const
@@ -2574,7 +2816,8 @@ GHC_INLINE bool path::is_relative() const
 GHC_INLINE path path::lexically_normal() const
 {
     path dest;
-    for (const string_type& s : *this) {
+    bool lastDotDot = false;
+    for (string_type s : *this) {
         if (s == ".") {
             dest /= "";
             continue;
@@ -2592,7 +2835,10 @@ GHC_INLINE path path::lexically_normal() const
                 continue;
             }
         }
-        dest /= s;
+        if (!(s.empty() && lastDotDot)) {
+            dest /= s;
+        }
+        lastDotDot = s == "..";
     }
     if (dest.empty()) {
         dest = ".";
@@ -2615,7 +2861,7 @@ GHC_INLINE path path::lexically_relative(const path& base) const
     }
     int count = 0;
     for (const auto& element : input_iterator_range<const_iterator>(b, base.end())) {
-        if (element != "." && element != "..") {
+        if (element != "." && element != "" && element != "..") {
             ++count;
         }
         else if (element == "..") {
@@ -2883,24 +3129,25 @@ template <class charT, class traits>
 inline std::basic_istream<charT, traits>& operator>>(std::basic_istream<charT, traits>& is, path& p)
 {
     std::basic_string<charT, traits> tmp;
-    auto c = is.get();
+    charT c;
+    is >> c;
     if (c == '"') {
         auto sf = is.flags();
         is >> std::noskipws;
         while (is) {
-            c = is.get();
+            auto c2 = is.get();
             if (is) {
-                if (c == '\\') {
-                    c = is.get();
+                if (c2 == '\\') {
+                    c2 = is.get();
                     if (is) {
-                        tmp += static_cast<charT>(c);
+                        tmp += static_cast<charT>(c2);
                     }
                 }
-                else if (c == '"') {
+                else if (c2 == '"') {
                     break;
                 }
                 else {
-                    tmp += static_cast<charT>(c);
+                    tmp += static_cast<charT>(c2);
                 }
             }
         }
@@ -2970,6 +3217,7 @@ GHC_INLINE const char* filesystem_error::what() const noexcept
 
 //-----------------------------------------------------------------------------
 // 30.10.15, filesystem operations
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path absolute(const path& p)
 {
     std::error_code ec;
@@ -2979,6 +3227,7 @@ GHC_INLINE path absolute(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE path absolute(const path& p, std::error_code& ec)
 {
@@ -2999,7 +3248,7 @@ GHC_INLINE path absolute(const path& p, std::error_code& ec)
             return result;
         }
     }
-    ec = std::error_code(::GetLastError(), std::system_category());
+    ec = detail::make_system_error();
     return path();
 #else
     path base = current_path(ec);
@@ -3024,11 +3273,12 @@ GHC_INLINE path absolute(const path& p, std::error_code& ec)
             }
         }
     }
-    ec = std::error_code(errno, std::system_category());
+    ec = detail::make_system_error();
     return path();
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path canonical(const path& p)
 {
     std::error_code ec;
@@ -3038,6 +3288,7 @@ GHC_INLINE path canonical(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE path canonical(const path& p, std::error_code& ec)
 {
@@ -3102,16 +3353,19 @@ GHC_INLINE path canonical(const path& p, std::error_code& ec)
     return result;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void copy(const path& from, const path& to)
 {
     copy(from, to, copy_options::none);
 }
+#endif
 
 GHC_INLINE void copy(const path& from, const path& to, std::error_code& ec) noexcept
 {
     copy(from, to, copy_options::none, ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void copy(const path& from, const path& to, copy_options options)
 {
     std::error_code ec;
@@ -3120,6 +3374,7 @@ GHC_INLINE void copy(const path& from, const path& to, copy_options options)
         throw filesystem_error(detail::systemErrorText(ec.value()), from, to, ec);
     }
 }
+#endif
 
 GHC_INLINE void copy(const path& from, const path& to, copy_options options, std::error_code& ec) noexcept
 {
@@ -3162,14 +3417,16 @@ GHC_INLINE void copy(const path& from, const path& to, copy_options options, std
             if ((options & copy_options::create_symlinks) != copy_options::none) {
                 create_symlink(from.is_absolute() ? from : canonical(from, ec), to, ec);
             }
+#ifndef GHC_OS_WEB
             else if ((options & copy_options::create_hard_links) != copy_options::none) {
                 create_hard_link(from, to, ec);
             }
+#endif
             else if (is_directory(fs_to)) {
                 copy_file(from, to / from.filename(), options, ec);
             }
             else {
-                copy_file(from, to, ec);
+                copy_file(from, to, options, ec);
             }
         }
     }
@@ -3197,16 +3454,19 @@ GHC_INLINE void copy(const path& from, const path& to, copy_options options, std
     return;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool copy_file(const path& from, const path& to)
 {
     return copy_file(from, to, copy_options::none);
 }
+#endif
 
 GHC_INLINE bool copy_file(const path& from, const path& to, std::error_code& ec) noexcept
 {
     return copy_file(from, to, copy_options::none, ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool copy_file(const path& from, const path& to, copy_options option)
 {
     std::error_code ec;
@@ -3216,6 +3476,7 @@ GHC_INLINE bool copy_file(const path& from, const path& to, copy_options option)
     }
     return result;
 }
+#endif
 
 GHC_INLINE bool copy_file(const path& from, const path& to, copy_options options, std::error_code& ec) noexcept
 {
@@ -3236,12 +3497,12 @@ GHC_INLINE bool copy_file(const path& from, const path& to, copy_options options
         if ((options & copy_options::update_existing) == copy_options::update_existing) {
             auto from_time = last_write_time(from, ec);
             if (ec) {
-                ec = std::error_code(errno, std::system_category());
+                ec = detail::make_system_error();
                 return false;
             }
             auto to_time = last_write_time(to, ec);
             if (ec) {
-                ec = std::error_code(errno, std::system_category());
+                ec = detail::make_system_error();
                 return false;
             }
             if (from_time <= to_time) {
@@ -3252,7 +3513,7 @@ GHC_INLINE bool copy_file(const path& from, const path& to, copy_options options
     }
 #ifdef GHC_OS_WINDOWS
     if (!::CopyFileW(detail::fromUtf8<std::wstring>(from.u8string()).c_str(), detail::fromUtf8<std::wstring>(to.u8string()).c_str(), !overwrite)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return false;
     }
     return true;
@@ -3260,37 +3521,41 @@ GHC_INLINE bool copy_file(const path& from, const path& to, copy_options options
     std::vector<char> buffer(16384, '\0');
     int in = -1, out = -1;
     if ((in = ::open(from.c_str(), O_RDONLY)) < 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
         return false;
     }
-    std::shared_ptr<void> guard_in(nullptr, [in](void*) { ::close(in); });
     int mode = O_CREAT | O_WRONLY | O_TRUNC;
     if (!overwrite) {
         mode |= O_EXCL;
     }
     if ((out = ::open(to.c_str(), mode, static_cast<int>(sf.permissions() & perms::all))) < 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
+        ::close(in);
         return false;
     }
-    std::shared_ptr<void> guard_out(nullptr, [out](void*) { ::close(out); });
     ssize_t br, bw;
     while ((br = ::read(in, buffer.data(), buffer.size())) > 0) {
-        int offset = 0;
+        ssize_t offset = 0;
         do {
-            if ((bw = ::write(out, buffer.data() + offset, br)) > 0) {
+            if ((bw = ::write(out, buffer.data() + offset, static_cast<size_t>(br))) > 0) {
                 br -= bw;
                 offset += bw;
             }
             else if (bw < 0) {
-                ec = std::error_code(errno, std::system_category());
+                ec = detail::make_system_error();
+                ::close(in);
+                ::close(out);
                 return false;
             }
         } while (br);
     }
+    ::close(in);
+    ::close(out);
     return true;
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void copy_symlink(const path& existing_symlink, const path& new_symlink)
 {
     std::error_code ec;
@@ -3299,6 +3564,7 @@ GHC_INLINE void copy_symlink(const path& existing_symlink, const path& new_symli
         throw filesystem_error(detail::systemErrorText(ec.value()), existing_symlink, new_symlink, ec);
     }
 }
+#endif
 
 GHC_INLINE void copy_symlink(const path& existing_symlink, const path& new_symlink, std::error_code& ec) noexcept
 {
@@ -3314,6 +3580,7 @@ GHC_INLINE void copy_symlink(const path& existing_symlink, const path& new_symli
     }
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool create_directories(const path& p)
 {
     std::error_code ec;
@@ -3323,12 +3590,14 @@ GHC_INLINE bool create_directories(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE bool create_directories(const path& p, std::error_code& ec) noexcept
 {
     path current;
     ec.clear();
-    for (const path::string_type& part : p) {
+    bool didCreate = false;
+    for (path::string_type part : p) {
         current /= part;
         if (current != p.root_name() && current != p.root_path()) {
             std::error_code tec;
@@ -3340,8 +3609,14 @@ GHC_INLINE bool create_directories(const path& p, std::error_code& ec) noexcept
             if (!exists(fs)) {
                 create_directory(current, ec);
                 if (ec) {
-                    return false;
+                    std::error_code tmp_ec;
+                    if (is_directory(current, tmp_ec)) {
+                        ec.clear();
+                    } else {
+                        return false;
+                    }
                 }
+                didCreate = true;
             }
 #ifndef LWG_2935_BEHAVIOUR
             else if (!is_directory(fs)) {
@@ -3351,9 +3626,10 @@ GHC_INLINE bool create_directories(const path& p, std::error_code& ec) noexcept
 #endif
         }
     }
-    return true;
+    return didCreate;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool create_directory(const path& p)
 {
     std::error_code ec;
@@ -3363,12 +3639,14 @@ GHC_INLINE bool create_directory(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE bool create_directory(const path& p, std::error_code& ec) noexcept
 {
     return create_directory(p, path(), ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool create_directory(const path& p, const path& attributes)
 {
     std::error_code ec;
@@ -3378,6 +3656,7 @@ GHC_INLINE bool create_directory(const path& p, const path& attributes)
     }
     return result;
 }
+#endif
 
 GHC_INLINE bool create_directory(const path& p, const path& attributes, std::error_code& ec) noexcept
 {
@@ -3396,12 +3675,12 @@ GHC_INLINE bool create_directory(const path& p, const path& attributes, std::err
 #ifdef GHC_OS_WINDOWS
     if (!attributes.empty()) {
         if (!::CreateDirectoryExW(detail::fromUtf8<std::wstring>(attributes.u8string()).c_str(), detail::fromUtf8<std::wstring>(p.u8string()).c_str(), NULL)) {
-            ec = std::error_code(::GetLastError(), std::system_category());
+            ec = detail::make_system_error();
             return false;
         }
     }
     else if (!::CreateDirectoryW(detail::fromUtf8<std::wstring>(p.u8string()).c_str(), NULL)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return false;
     }
 #else
@@ -3409,19 +3688,20 @@ GHC_INLINE bool create_directory(const path& p, const path& attributes, std::err
     if (!attributes.empty()) {
         struct ::stat fileStat;
         if (::stat(attributes.c_str(), &fileStat) != 0) {
-            ec = std::error_code(errno, std::system_category());
+            ec = detail::make_system_error();
             return false;
         }
         attribs = fileStat.st_mode;
     }
     if (::mkdir(p.c_str(), attribs) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
         return false;
     }
 #endif
     return true;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void create_directory_symlink(const path& to, const path& new_symlink)
 {
     std::error_code ec;
@@ -3430,12 +3710,15 @@ GHC_INLINE void create_directory_symlink(const path& to, const path& new_symlink
         throw filesystem_error(detail::systemErrorText(ec.value()), to, new_symlink, ec);
     }
 }
+#endif
 
 GHC_INLINE void create_directory_symlink(const path& to, const path& new_symlink, std::error_code& ec) noexcept
 {
     detail::create_symlink(to, new_symlink, true, ec);
 }
 
+#ifndef GHC_OS_WEB
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void create_hard_link(const path& to, const path& new_hard_link)
 {
     std::error_code ec;
@@ -3444,12 +3727,15 @@ GHC_INLINE void create_hard_link(const path& to, const path& new_hard_link)
         throw filesystem_error(detail::systemErrorText(ec.value()), to, new_hard_link, ec);
     }
 }
+#endif
 
 GHC_INLINE void create_hard_link(const path& to, const path& new_hard_link, std::error_code& ec) noexcept
 {
     detail::create_hardlink(to, new_hard_link, ec);
 }
+#endif
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void create_symlink(const path& to, const path& new_symlink)
 {
     std::error_code ec;
@@ -3458,12 +3744,14 @@ GHC_INLINE void create_symlink(const path& to, const path& new_symlink)
         throw filesystem_error(detail::systemErrorText(ec.value()), to, new_symlink, ec);
     }
 }
+#endif
 
 GHC_INLINE void create_symlink(const path& to, const path& new_symlink, std::error_code& ec) noexcept
 {
     detail::create_symlink(to, new_symlink, false, ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path current_path()
 {
     std::error_code ec;
@@ -3473,6 +3761,7 @@ GHC_INLINE path current_path()
     }
     return result;
 }
+#endif
 
 GHC_INLINE path current_path(std::error_code& ec)
 {
@@ -3481,21 +3770,22 @@ GHC_INLINE path current_path(std::error_code& ec)
     DWORD pathlen = ::GetCurrentDirectoryW(0, 0);
     std::unique_ptr<wchar_t[]> buffer(new wchar_t[size_t(pathlen) + 1]);
     if (::GetCurrentDirectoryW(pathlen, buffer.get()) == 0) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return path();
     }
     return path(std::wstring(buffer.get()), path::native_format);
 #else
     size_t pathlen = static_cast<size_t>(std::max(int(::pathconf(".", _PC_PATH_MAX)), int(PATH_MAX)));
     std::unique_ptr<char[]> buffer(new char[pathlen + 1]);
-    if (::getcwd(buffer.get(), pathlen) == NULL) {
-        ec = std::error_code(errno, std::system_category());
+    if (::getcwd(buffer.get(), pathlen) == nullptr) {
+        ec = detail::make_system_error();
         return path();
     }
     return path(buffer.get());
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void current_path(const path& p)
 {
     std::error_code ec;
@@ -3504,17 +3794,18 @@ GHC_INLINE void current_path(const path& p)
         throw filesystem_error(detail::systemErrorText(ec.value()), p, ec);
     }
 }
+#endif
 
 GHC_INLINE void current_path(const path& p, std::error_code& ec) noexcept
 {
     ec.clear();
 #ifdef GHC_OS_WINDOWS
     if (!::SetCurrentDirectoryW(detail::fromUtf8<std::wstring>(p.u8string()).c_str())) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
 #else
     if (::chdir(p.string().c_str()) == -1) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
     }
 #endif
 }
@@ -3524,10 +3815,12 @@ GHC_INLINE bool exists(file_status s) noexcept
     return status_known(s) && s.type() != file_type::not_found;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool exists(const path& p)
 {
     return exists(status(p));
 }
+#endif
 
 GHC_INLINE bool exists(const path& p, std::error_code& ec) noexcept
 {
@@ -3538,6 +3831,7 @@ GHC_INLINE bool exists(const path& p, std::error_code& ec) noexcept
     return exists(s);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool equivalent(const path& p1, const path& p2)
 {
     std::error_code ec;
@@ -3547,6 +3841,7 @@ GHC_INLINE bool equivalent(const path& p1, const path& p2)
     }
     return result;
 }
+#endif
 
 GHC_INLINE bool equivalent(const path& p1, const path& p2, std::error_code& ec) noexcept
 {
@@ -3557,21 +3852,21 @@ GHC_INLINE bool equivalent(const path& p1, const path& p2, std::error_code& ec) 
     std::shared_ptr<void> file2(::CreateFileW(p2.wstring().c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0), CloseHandle);
     if (file1.get() == INVALID_HANDLE_VALUE || file2.get() == INVALID_HANDLE_VALUE) {
 #ifdef LWG_2937_BEHAVIOUR
-        ec = std::error_code(e1 ? e1 : ::GetLastError(), std::system_category());
+        ec = detail::make_system_error(e1 ? e1 : ::GetLastError());
 #else
         if (file1 == file2) {
-            ec = std::error_code(e1 ? e1 : ::GetLastError(), std::system_category());
+            ec = detail::make_system_error(e1 ? e1 : ::GetLastError());
         }
 #endif
         return false;
     }
     BY_HANDLE_FILE_INFORMATION inf1, inf2;
     if (!::GetFileInformationByHandle(file1.get(), &inf1)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return false;
     }
     if (!::GetFileInformationByHandle(file2.get(), &inf2)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return false;
     }
     return inf1.ftLastWriteTime.dwLowDateTime == inf2.ftLastWriteTime.dwLowDateTime && inf1.ftLastWriteTime.dwHighDateTime == inf2.ftLastWriteTime.dwHighDateTime && inf1.nFileIndexHigh == inf2.nFileIndexHigh && inf1.nFileIndexLow == inf2.nFileIndexLow &&
@@ -3583,10 +3878,10 @@ GHC_INLINE bool equivalent(const path& p1, const path& p2, std::error_code& ec) 
     auto rc2 = ::stat(p2.c_str(), &s2);
     if (rc1 || rc2) {
 #ifdef LWG_2937_BEHAVIOUR
-        ec = std::error_code(e1 ? e1 : errno, std::system_category());
+        ec = detail::make_system_error(e1 ? e1 : errno);
 #else
         if (rc1 && rc2) {
-            ec = std::error_code(e1 ? e1 : errno, std::system_category());
+            ec = detail::make_system_error(e1 ? e1 : errno);
         }
 #endif
         return false;
@@ -3595,6 +3890,7 @@ GHC_INLINE bool equivalent(const path& p1, const path& p2, std::error_code& ec) 
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE uintmax_t file_size(const path& p)
 {
     std::error_code ec;
@@ -3604,6 +3900,7 @@ GHC_INLINE uintmax_t file_size(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE uintmax_t file_size(const path& p, std::error_code& ec) noexcept
 {
@@ -3611,20 +3908,22 @@ GHC_INLINE uintmax_t file_size(const path& p, std::error_code& ec) noexcept
 #ifdef GHC_OS_WINDOWS
     WIN32_FILE_ATTRIBUTE_DATA attr;
     if (!GetFileAttributesExW(detail::fromUtf8<std::wstring>(p.u8string()).c_str(), GetFileExInfoStandard, &attr)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return static_cast<uintmax_t>(-1);
     }
     return static_cast<uintmax_t>(attr.nFileSizeHigh) << (sizeof(attr.nFileSizeHigh) * 8) | attr.nFileSizeLow;
 #else
     struct ::stat fileStat;
     if (::stat(p.c_str(), &fileStat) == -1) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
         return static_cast<uintmax_t>(-1);
     }
     return static_cast<uintmax_t>(fileStat.st_size);
 #endif
 }
 
+#ifndef GHC_OS_WEB
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE uintmax_t hard_link_count(const path& p)
 {
     std::error_code ec;
@@ -3634,6 +3933,7 @@ GHC_INLINE uintmax_t hard_link_count(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE uintmax_t hard_link_count(const path& p, std::error_code& ec) noexcept
 {
@@ -3643,11 +3943,11 @@ GHC_INLINE uintmax_t hard_link_count(const path& p, std::error_code& ec) noexcep
     std::shared_ptr<void> file(::CreateFileW(p.wstring().c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0), CloseHandle);
     BY_HANDLE_FILE_INFORMATION inf;
     if (file.get() == INVALID_HANDLE_VALUE) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
     else {
         if (!::GetFileInformationByHandle(file.get(), &inf)) {
-            ec = std::error_code(::GetLastError(), std::system_category());
+            ec = detail::make_system_error();
         }
         else {
             result = inf.nNumberOfLinks;
@@ -3663,16 +3963,19 @@ GHC_INLINE uintmax_t hard_link_count(const path& p, std::error_code& ec) noexcep
     return ec ? static_cast<uintmax_t>(-1) : result;
 #endif
 }
+#endif
 
 GHC_INLINE bool is_block_file(file_status s) noexcept
 {
     return s.type() == file_type::block;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_block_file(const path& p)
 {
     return is_block_file(status(p));
 }
+#endif
 
 GHC_INLINE bool is_block_file(const path& p, std::error_code& ec) noexcept
 {
@@ -3684,10 +3987,12 @@ GHC_INLINE bool is_character_file(file_status s) noexcept
     return s.type() == file_type::character;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_character_file(const path& p)
 {
     return is_character_file(status(p));
 }
+#endif
 
 GHC_INLINE bool is_character_file(const path& p, std::error_code& ec) noexcept
 {
@@ -3699,16 +4004,19 @@ GHC_INLINE bool is_directory(file_status s) noexcept
     return s.type() == file_type::directory;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_directory(const path& p)
 {
     return is_directory(status(p));
 }
+#endif
 
 GHC_INLINE bool is_directory(const path& p, std::error_code& ec) noexcept
 {
     return is_directory(status(p, ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_empty(const path& p)
 {
     if (is_directory(p)) {
@@ -3718,6 +4026,7 @@ GHC_INLINE bool is_empty(const path& p)
         return file_size(p) == 0;
     }
 }
+#endif
 
 GHC_INLINE bool is_empty(const path& p, std::error_code& ec) noexcept
 {
@@ -3746,10 +4055,12 @@ GHC_INLINE bool is_fifo(file_status s) noexcept
     return s.type() == file_type::fifo;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_fifo(const path& p)
 {
     return is_fifo(status(p));
 }
+#endif
 
 GHC_INLINE bool is_fifo(const path& p, std::error_code& ec) noexcept
 {
@@ -3761,10 +4072,12 @@ GHC_INLINE bool is_other(file_status s) noexcept
     return exists(s) && !is_regular_file(s) && !is_directory(s) && !is_symlink(s);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_other(const path& p)
 {
     return is_other(status(p));
 }
+#endif
 
 GHC_INLINE bool is_other(const path& p, std::error_code& ec) noexcept
 {
@@ -3776,10 +4089,12 @@ GHC_INLINE bool is_regular_file(file_status s) noexcept
     return s.type() == file_type::regular;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_regular_file(const path& p)
 {
     return is_regular_file(status(p));
 }
+#endif
 
 GHC_INLINE bool is_regular_file(const path& p, std::error_code& ec) noexcept
 {
@@ -3791,10 +4106,12 @@ GHC_INLINE bool is_socket(file_status s) noexcept
     return s.type() == file_type::socket;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_socket(const path& p)
 {
     return is_socket(status(p));
 }
+#endif
 
 GHC_INLINE bool is_socket(const path& p, std::error_code& ec) noexcept
 {
@@ -3806,16 +4123,19 @@ GHC_INLINE bool is_symlink(file_status s) noexcept
     return s.type() == file_type::symlink;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool is_symlink(const path& p)
 {
     return is_symlink(symlink_status(p));
 }
+#endif
 
 GHC_INLINE bool is_symlink(const path& p, std::error_code& ec) noexcept
 {
     return is_symlink(symlink_status(p, ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE file_time_type last_write_time(const path& p)
 {
     std::error_code ec;
@@ -3825,6 +4145,7 @@ GHC_INLINE file_time_type last_write_time(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE file_time_type last_write_time(const path& p, std::error_code& ec) noexcept
 {
@@ -3834,6 +4155,7 @@ GHC_INLINE file_time_type last_write_time(const path& p, std::error_code& ec) no
     return ec ? (file_time_type::min)() : std::chrono::system_clock::from_time_t(result);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void last_write_time(const path& p, file_time_type new_time)
 {
     std::error_code ec;
@@ -3842,6 +4164,7 @@ GHC_INLINE void last_write_time(const path& p, file_time_type new_time)
         throw filesystem_error(detail::systemErrorText(ec.value()), p, ec);
     }
 }
+#endif
 
 GHC_INLINE void last_write_time(const path& p, file_time_type new_time, std::error_code& ec) noexcept
 {
@@ -3851,10 +4174,10 @@ GHC_INLINE void last_write_time(const path& p, file_time_type new_time, std::err
     std::shared_ptr<void> file(::CreateFileW(p.wstring().c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL), ::CloseHandle);
     FILETIME ft;
     auto tt = std::chrono::duration_cast<std::chrono::microseconds>(d).count() * 10 + 116444736000000000;
-    ft.dwLowDateTime = (unsigned long)tt;
-    ft.dwHighDateTime = tt >> 32;
+    ft.dwLowDateTime = static_cast<DWORD>(tt);
+    ft.dwHighDateTime = static_cast<DWORD>(tt >> 32);
     if (!::SetFileTime(file.get(), 0, 0, &ft)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
 #elif defined(GHC_OS_MACOS)
 #ifdef __MAC_OS_X_VERSION_MIN_REQUIRED
@@ -3870,33 +4193,41 @@ GHC_INLINE void last_write_time(const path& p, file_time_type new_time, std::err
             return;
         }
     }
-    ec = std::error_code(errno, std::system_category());
+    ec = detail::make_system_error();
     return;
 #else
     struct ::timespec times[2];
     times[0].tv_sec = 0;
     times[0].tv_nsec = UTIME_OMIT;
     times[1].tv_sec = std::chrono::duration_cast<std::chrono::seconds>(d).count();
-    times[1].tv_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(d).count() % 1000000000;
+    times[1].tv_nsec = 0; //std::chrono::duration_cast<std::chrono::nanoseconds>(d).count() % 1000000000;
     if (::utimensat(AT_FDCWD, p.c_str(), times, AT_SYMLINK_NOFOLLOW) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
     }
     return;
 #endif
 #endif
 #else
+#ifndef UTIME_OMIT
+#define UTIME_OMIT ((1l << 30) - 2l)
+#endif
     struct ::timespec times[2];
     times[0].tv_sec = 0;
     times[0].tv_nsec = UTIME_OMIT;
-    times[1].tv_sec = std::chrono::duration_cast<std::chrono::seconds>(d).count();
-    times[1].tv_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(d).count() % 1000000000;
+    times[1].tv_sec = static_cast<decltype(times[1].tv_sec)>(std::chrono::duration_cast<std::chrono::seconds>(d).count());
+    times[1].tv_nsec = static_cast<decltype(times[1].tv_nsec)>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count() % 1000000000);
+#if defined(__ANDROID_API__) && __ANDROID_API__ < 12
+    if (syscall(__NR_utimensat, AT_FDCWD, p.c_str(), times, AT_SYMLINK_NOFOLLOW) != 0) {
+#else
     if (::utimensat(AT_FDCWD, p.c_str(), times, AT_SYMLINK_NOFOLLOW) != 0) {
-        ec = std::error_code(errno, std::system_category());
+#endif
+        ec = detail::make_system_error();
     }
     return;
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void permissions(const path& p, perms prms, perm_options opts)
 {
     std::error_code ec;
@@ -3905,6 +4236,7 @@ GHC_INLINE void permissions(const path& p, perms prms, perm_options opts)
         throw filesystem_error(detail::systemErrorText(ec.value()), p, ec);
     }
 }
+#endif
 
 GHC_INLINE void permissions(const path& p, perms prms, std::error_code& ec) noexcept
 {
@@ -3930,12 +4262,12 @@ GHC_INLINE void permissions(const path& p, perms prms, perm_options opts, std::e
 #ifdef __GNUC__
     auto oldAttr = GetFileAttributesW(p.wstring().c_str());
     if (oldAttr != INVALID_FILE_ATTRIBUTES) {
-        DWORD newAttr = ((prms & perms::owner_write) == perms::owner_write) ? oldAttr & ~FILE_ATTRIBUTE_READONLY : oldAttr | FILE_ATTRIBUTE_READONLY;
+        DWORD newAttr = ((prms & perms::owner_write) == perms::owner_write) ? oldAttr & ~(static_cast<DWORD>(FILE_ATTRIBUTE_READONLY)) : oldAttr | FILE_ATTRIBUTE_READONLY;
         if (oldAttr == newAttr || SetFileAttributesW(p.wstring().c_str(), newAttr)) {
             return;
         }
     }
-    ec = std::error_code(::GetLastError(), std::system_category());
+    ec = detail::make_system_error();
 #else
     int mode = 0;
     if ((prms & perms::owner_read) == perms::owner_read) {
@@ -3945,33 +4277,38 @@ GHC_INLINE void permissions(const path& p, perms prms, perm_options opts, std::e
         mode |= _S_IWRITE;
     }
     if (::_wchmod(p.wstring().c_str(), mode) != 0) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
 #endif
 #else
     if ((opts & perm_options::nofollow) != perm_options::nofollow) {
         if (::chmod(p.c_str(), static_cast<mode_t>(prms)) != 0) {
-            ec = std::error_code(errno, std::system_category());
+            ec = detail::make_system_error();
         }
     }
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path proximate(const path& p, std::error_code& ec)
 {
     return proximate(p, current_path(), ec);
 }
+#endif
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path proximate(const path& p, const path& base)
 {
     return weakly_canonical(p).lexically_proximate(weakly_canonical(base));
 }
+#endif
 
 GHC_INLINE path proximate(const path& p, const path& base, std::error_code& ec)
 {
     return weakly_canonical(p, ec).lexically_proximate(weakly_canonical(base, ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path read_symlink(const path& p)
 {
     std::error_code ec;
@@ -3981,6 +4318,7 @@ GHC_INLINE path read_symlink(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE path read_symlink(const path& p, std::error_code& ec)
 {
@@ -3998,16 +4336,19 @@ GHC_INLINE path relative(const path& p, std::error_code& ec)
     return relative(p, current_path(ec), ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path relative(const path& p, const path& base)
 {
     return weakly_canonical(p).lexically_relative(weakly_canonical(base));
 }
+#endif
 
 GHC_INLINE path relative(const path& p, const path& base, std::error_code& ec)
 {
     return weakly_canonical(p, ec).lexically_relative(weakly_canonical(base, ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool remove(const path& p)
 {
     std::error_code ec;
@@ -4017,6 +4358,7 @@ GHC_INLINE bool remove(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE bool remove(const path& p, std::error_code& ec) noexcept
 {
@@ -4029,17 +4371,17 @@ GHC_INLINE bool remove(const path& p, std::error_code& ec) noexcept
         if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
             return false;
         }
-        ec = std::error_code(error, std::system_category());
+        ec = detail::make_system_error(error);
     }
     if (!ec) {
         if (attr & FILE_ATTRIBUTE_DIRECTORY) {
             if (!RemoveDirectoryW(np.c_str())) {
-                ec = std::error_code(::GetLastError(), std::system_category());
+                ec = detail::make_system_error();
             }
         }
         else {
             if (!DeleteFileW(np.c_str())) {
-                ec = std::error_code(::GetLastError(), std::system_category());
+                ec = detail::make_system_error();
             }
         }
     }
@@ -4049,12 +4391,13 @@ GHC_INLINE bool remove(const path& p, std::error_code& ec) noexcept
         if (error == ENOENT) {
             return false;
         }
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
     }
 #endif
     return ec ? false : true;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE uintmax_t remove_all(const path& p)
 {
     std::error_code ec;
@@ -4064,6 +4407,7 @@ GHC_INLINE uintmax_t remove_all(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE uintmax_t remove_all(const path& p, std::error_code& ec) noexcept
 {
@@ -4080,7 +4424,11 @@ GHC_INLINE uintmax_t remove_all(const path& p, std::error_code& ec) noexcept
             if (ec) {
                 break;
             }
-            if (!iter->is_symlink() && iter->is_directory()) {
+            bool is_symlink_result = iter->is_symlink(ec);
+            if (ec) return static_cast<uintmax_t>(-1);
+            bool is_directory_result = iter->is_directory(ec);
+            if (ec) return static_cast<uintmax_t>(-1);
+            if (!is_symlink_result && is_directory_result) {
                 count += remove_all(iter->path(), ec);
                 if (ec) {
                     return static_cast<uintmax_t>(-1);
@@ -4106,6 +4454,7 @@ GHC_INLINE uintmax_t remove_all(const path& p, std::error_code& ec) noexcept
     return count;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void rename(const path& from, const path& to)
 {
     std::error_code ec;
@@ -4114,25 +4463,27 @@ GHC_INLINE void rename(const path& from, const path& to)
         throw filesystem_error(detail::systemErrorText(ec.value()), from, to, ec);
     }
 }
+#endif
 
 GHC_INLINE void rename(const path& from, const path& to, std::error_code& ec) noexcept
 {
     ec.clear();
 #ifdef GHC_OS_WINDOWS
     if (from != to) {
-        if (!MoveFileW(detail::fromUtf8<std::wstring>(from.u8string()).c_str(), detail::fromUtf8<std::wstring>(to.u8string()).c_str())) {
-            ec = std::error_code(::GetLastError(), std::system_category());
+        if (!MoveFileExW(detail::fromUtf8<std::wstring>(from.u8string()).c_str(), detail::fromUtf8<std::wstring>(to.u8string()).c_str(), (DWORD)MOVEFILE_REPLACE_EXISTING)) {
+            ec = detail::make_system_error();
         }
     }
 #else
     if (from != to) {
         if (::rename(from.c_str(), to.c_str()) != 0) {
-            ec = std::error_code(errno, std::system_category());
+            ec = detail::make_system_error();
         }
     }
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void resize_file(const path& p, uintmax_t size)
 {
     std::error_code ec;
@@ -4141,27 +4492,37 @@ GHC_INLINE void resize_file(const path& p, uintmax_t size)
         throw filesystem_error(detail::systemErrorText(ec.value()), p, ec);
     }
 }
+#endif
 
 GHC_INLINE void resize_file(const path& p, uintmax_t size, std::error_code& ec) noexcept
 {
     ec.clear();
 #ifdef GHC_OS_WINDOWS
     LARGE_INTEGER lisize;
-    lisize.QuadPart = size;
+    lisize.QuadPart = static_cast<LONGLONG>(size);
+    if(lisize.QuadPart < 0) {
+#ifdef ERROR_FILE_TOO_LARGE
+        ec = detail::make_system_error(ERROR_FILE_TOO_LARGE);
+#else
+        ec = detail::make_system_error(223);
+#endif
+        return;
+    }
     std::shared_ptr<void> file(CreateFileW(detail::fromUtf8<std::wstring>(p.u8string()).c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL), CloseHandle);
     if (file.get() == INVALID_HANDLE_VALUE) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
     else if (SetFilePointerEx(file.get(), lisize, NULL, FILE_BEGIN) == 0 || SetEndOfFile(file.get()) == 0) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
     }
 #else
-    if (::truncate(p.c_str(), size) != 0) {
-        ec = std::error_code(errno, std::system_category());
+    if (::truncate(p.c_str(), static_cast<off_t>(size)) != 0) {
+        ec = detail::make_system_error();
     }
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE space_info space(const path& p)
 {
     std::error_code ec;
@@ -4171,32 +4532,31 @@ GHC_INLINE space_info space(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE space_info space(const path& p, std::error_code& ec) noexcept
 {
     ec.clear();
 #ifdef GHC_OS_WINDOWS
-    ULARGE_INTEGER freeBytesAvailableToCaller = {0};
-    ULARGE_INTEGER totalNumberOfBytes = {0};
-    ULARGE_INTEGER totalNumberOfFreeBytes = {0};
+    ULARGE_INTEGER freeBytesAvailableToCaller = {{0, 0}};
+    ULARGE_INTEGER totalNumberOfBytes = {{0, 0}};
+    ULARGE_INTEGER totalNumberOfFreeBytes = {{0, 0}};
     if (!GetDiskFreeSpaceExW(detail::fromUtf8<std::wstring>(p.u8string()).c_str(), &freeBytesAvailableToCaller, &totalNumberOfBytes, &totalNumberOfFreeBytes)) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return {static_cast<uintmax_t>(-1), static_cast<uintmax_t>(-1), static_cast<uintmax_t>(-1)};
     }
     return {static_cast<uintmax_t>(totalNumberOfBytes.QuadPart), static_cast<uintmax_t>(totalNumberOfFreeBytes.QuadPart), static_cast<uintmax_t>(freeBytesAvailableToCaller.QuadPart)};
-#elif !defined(__ANDROID__) || __ANDROID_API__ >= 19
+#else
     struct ::statvfs sfs;
     if (::statvfs(p.c_str(), &sfs) != 0) {
-        ec = std::error_code(errno, std::system_category());
+        ec = detail::make_system_error();
         return {static_cast<uintmax_t>(-1), static_cast<uintmax_t>(-1), static_cast<uintmax_t>(-1)};
     }
     return {static_cast<uintmax_t>(sfs.f_blocks * sfs.f_frsize), static_cast<uintmax_t>(sfs.f_bfree * sfs.f_frsize), static_cast<uintmax_t>(sfs.f_bavail * sfs.f_frsize)};
-#else
-    ec = detail::make_error_code(detail::portable_error::not_supported);
-    return {static_cast<uintmax_t>(-1), static_cast<uintmax_t>(-1), static_cast<uintmax_t>(-1)};
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE file_status status(const path& p)
 {
     std::error_code ec;
@@ -4206,6 +4566,7 @@ GHC_INLINE file_status status(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE file_status status(const path& p, std::error_code& ec) noexcept
 {
@@ -4217,6 +4578,7 @@ GHC_INLINE bool status_known(file_status s) noexcept
     return s.type() != file_type::none;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE file_status symlink_status(const path& p)
 {
     std::error_code ec;
@@ -4226,12 +4588,14 @@ GHC_INLINE file_status symlink_status(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE file_status symlink_status(const path& p, std::error_code& ec) noexcept
 {
     return detail::symlink_status_ex(p, ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path temp_directory_path()
 {
     std::error_code ec;
@@ -4241,15 +4605,16 @@ GHC_INLINE path temp_directory_path()
     }
     return result;
 }
+#endif
 
 GHC_INLINE path temp_directory_path(std::error_code& ec) noexcept
 {
     ec.clear();
 #ifdef GHC_OS_WINDOWS
     wchar_t buffer[512];
-    int rc = GetTempPathW(511, buffer);
+    auto rc = GetTempPathW(511, buffer);
     if (!rc || rc > 511) {
-        ec = std::error_code(::GetLastError(), std::system_category());
+        ec = detail::make_system_error();
         return path();
     }
     return path(std::wstring(buffer));
@@ -4266,6 +4631,7 @@ GHC_INLINE path temp_directory_path(std::error_code& ec) noexcept
 #endif
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE path weakly_canonical(const path& p)
 {
     std::error_code ec;
@@ -4275,6 +4641,7 @@ GHC_INLINE path weakly_canonical(const path& p)
     }
     return result;
 }
+#endif
 
 GHC_INLINE path weakly_canonical(const path& p, std::error_code& ec) noexcept
 {
@@ -4386,6 +4753,7 @@ GHC_INLINE perms file_status::permissions() const noexcept
 // directory_entry::directory_entry() noexcept = default;
 // directory_entry::directory_entry(const directory_entry&) = default;
 // directory_entry::directory_entry(directory_entry&&) noexcept = default;
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE directory_entry::directory_entry(const filesystem::path& p)
     : _path(p)
     , _file_size(0)
@@ -4396,6 +4764,7 @@ GHC_INLINE directory_entry::directory_entry(const filesystem::path& p)
 {
     refresh();
 }
+#endif
 
 GHC_INLINE directory_entry::directory_entry(const filesystem::path& p, std::error_code& ec)
     : _path(p)
@@ -4415,11 +4784,13 @@ GHC_INLINE directory_entry::~directory_entry() {}
 // directory_entry& directory_entry::operator=(directory_entry&&) noexcept = default;
 
 // 30.10.12.2 directory_entry modifiers
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void directory_entry::assign(const filesystem::path& p)
 {
     _path = p;
     refresh();
 }
+#endif
 
 GHC_INLINE void directory_entry::assign(const filesystem::path& p, std::error_code& ec)
 {
@@ -4427,11 +4798,13 @@ GHC_INLINE void directory_entry::assign(const filesystem::path& p, std::error_co
     refresh(ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void directory_entry::replace_filename(const filesystem::path& p)
 {
     _path.replace_filename(p);
     refresh();
 }
+#endif
 
 GHC_INLINE void directory_entry::replace_filename(const filesystem::path& p, std::error_code& ec)
 {
@@ -4439,6 +4812,7 @@ GHC_INLINE void directory_entry::replace_filename(const filesystem::path& p, std
     refresh(ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void directory_entry::refresh()
 {
     std::error_code ec;
@@ -4447,6 +4821,7 @@ GHC_INLINE void directory_entry::refresh()
         throw filesystem_error(detail::systemErrorText(ec.value()), _path, ec);
     }
 }
+#endif
 
 GHC_INLINE void directory_entry::refresh(std::error_code& ec) noexcept
 {
@@ -4468,95 +4843,114 @@ GHC_INLINE directory_entry::operator const filesystem::path&() const noexcept
     return _path;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::exists() const
 {
     return filesystem::exists(status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::exists(std::error_code& ec) const noexcept
 {
     return filesystem::exists(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_block_file() const
 {
     return filesystem::is_block_file(status());
 }
+#endif
 GHC_INLINE bool directory_entry::is_block_file(std::error_code& ec) const noexcept
 {
     return filesystem::is_block_file(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_character_file() const
 {
     return filesystem::is_character_file(status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::is_character_file(std::error_code& ec) const noexcept
 {
     return filesystem::is_character_file(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_directory() const
 {
     return filesystem::is_directory(status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::is_directory(std::error_code& ec) const noexcept
 {
     return filesystem::is_directory(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_fifo() const
 {
     return filesystem::is_fifo(status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::is_fifo(std::error_code& ec) const noexcept
 {
     return filesystem::is_fifo(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_other() const
 {
     return filesystem::is_other(status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::is_other(std::error_code& ec) const noexcept
 {
     return filesystem::is_other(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_regular_file() const
 {
     return filesystem::is_regular_file(status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::is_regular_file(std::error_code& ec) const noexcept
 {
     return filesystem::is_regular_file(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_socket() const
 {
     return filesystem::is_socket(status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::is_socket(std::error_code& ec) const noexcept
 {
     return filesystem::is_socket(status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE bool directory_entry::is_symlink() const
 {
     return filesystem::is_symlink(symlink_status());
 }
+#endif
 
 GHC_INLINE bool directory_entry::is_symlink(std::error_code& ec) const noexcept
 {
     return filesystem::is_symlink(symlink_status(ec));
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE uintmax_t directory_entry::file_size() const
 {
     if (_status.type() != file_type::none) {
@@ -4564,15 +4958,19 @@ GHC_INLINE uintmax_t directory_entry::file_size() const
     }
     return filesystem::file_size(path());
 }
+#endif
 
 GHC_INLINE uintmax_t directory_entry::file_size(std::error_code& ec) const noexcept
 {
     if (_status.type() != file_type::none) {
+        ec.clear();
         return _file_size;
     }
     return filesystem::file_size(path(), ec);
 }
 
+#ifndef GHC_OS_WEB
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE uintmax_t directory_entry::hard_link_count() const
 {
 #ifndef GHC_OS_WINDOWS
@@ -4582,17 +4980,21 @@ GHC_INLINE uintmax_t directory_entry::hard_link_count() const
 #endif
     return filesystem::hard_link_count(path());
 }
+#endif
 
 GHC_INLINE uintmax_t directory_entry::hard_link_count(std::error_code& ec) const noexcept
 {
 #ifndef GHC_OS_WINDOWS
     if (_status.type() != file_type::none) {
+        ec.clear();
         return _hard_link_count;
     }
 #endif
     return filesystem::hard_link_count(path(), ec);
 }
+#endif
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE file_time_type directory_entry::last_write_time() const
 {
     if (_status.type() != file_type::none) {
@@ -4600,15 +5002,18 @@ GHC_INLINE file_time_type directory_entry::last_write_time() const
     }
     return filesystem::last_write_time(path());
 }
+#endif
 
 GHC_INLINE file_time_type directory_entry::last_write_time(std::error_code& ec) const noexcept
 {
     if (_status.type() != file_type::none) {
+        ec.clear();
         return std::chrono::system_clock::from_time_t(_last_write_time);
     }
     return filesystem::last_write_time(path(), ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE file_status directory_entry::status() const
 {
     if (_status.type() != file_type::none) {
@@ -4616,15 +5021,18 @@ GHC_INLINE file_status directory_entry::status() const
     }
     return filesystem::status(path());
 }
+#endif
 
 GHC_INLINE file_status directory_entry::status(std::error_code& ec) const noexcept
 {
     if (_status.type() != file_type::none) {
+        ec.clear();
         return _status;
     }
     return filesystem::status(path(), ec);
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE file_status directory_entry::symlink_status() const
 {
     if (_symlink_status.type() != file_type::none) {
@@ -4632,10 +5040,12 @@ GHC_INLINE file_status directory_entry::symlink_status() const
     }
     return filesystem::symlink_status(path());
 }
+#endif
 
 GHC_INLINE file_status directory_entry::symlink_status(std::error_code& ec) const noexcept
 {
     if (_symlink_status.type() != file_type::none) {
+        ec.clear();
         return _symlink_status;
     }
     return filesystem::symlink_status(path(), ec);
@@ -4681,7 +5091,6 @@ public:
     impl(const path& p, directory_options options)
         : _base(p)
         , _options(options)
-        , _findData{0}
         , _dirHandle(INVALID_HANDLE_VALUE)
     {
         if (!_base.empty()) {
@@ -4699,7 +5108,7 @@ public:
                 auto error = ::GetLastError();
                 _base = filesystem::path();
                 if (error != ERROR_ACCESS_DENIED || (options & directory_options::skip_permission_denied) == directory_options::none) {
-                    _ec = std::error_code(::GetLastError(), std::system_category());
+                    _ec = detail::make_system_error();
                 }
             }
         }
@@ -4718,6 +5127,7 @@ public:
             do {
                 if (FindNextFileW(_dirHandle, &_findData)) {
                     _current = _base;
+#ifdef GHC_RAISE_UNICODE_ERRORS
                     try {
                         _current.append_name(detail::toUtf8(_findData.cFileName).c_str());
                     }
@@ -4725,12 +5135,15 @@ public:
                         ec = fe.code();
                         return;
                     }
+#else
+                    _current.append_name(detail::toUtf8(_findData.cFileName).c_str());
+#endif
                     copyToDirEntry(ec);
                 }
                 else {
                     auto err = ::GetLastError();
                     if(err != ERROR_NO_MORE_FILES) {
-                        _ec = ec = std::error_code(err, std::system_category());
+                        _ec = ec = detail::make_system_error(err);
                     }
                     FindClose(_dirHandle);
                     _dirHandle = INVALID_HANDLE_VALUE;
@@ -4790,7 +5203,7 @@ public:
                 auto error = errno;
                 _base = filesystem::path();
                 if (error != EACCES || (options & directory_options::skip_permission_denied) == directory_options::none) {
-                    _ec = std::error_code(errno, std::system_category());
+                    _ec = detail::make_system_error();
                 }
             }
             else {
@@ -4808,24 +5221,30 @@ public:
     void increment(std::error_code& ec)
     {
         if (_dir) {
+            bool skip;
             do {
+                skip = false;
                 errno = 0;
-                _entry = readdir(_dir);
+                _entry = ::readdir(_dir);
                 if (_entry) {
                     _current = _base;
                     _current.append_name(_entry->d_name);
                     _dir_entry = directory_entry(_current, ec);
+                    if(ec && (ec.value() == EACCES || ec.value() == EPERM) && (_options & directory_options::skip_permission_denied) == directory_options::skip_permission_denied) {
+                        ec.clear();
+                        skip = true;
+                    }
                 }
                 else {
                     ::closedir(_dir);
                     _dir = nullptr;
                     _current = path();
                     if (errno) {
-                        ec = std::error_code(errno, std::system_category());
+                        ec = detail::make_system_error();
                     }
                     break;
                 }
-            } while (std::strcmp(_entry->d_name, ".") == 0 || std::strcmp(_entry->d_name, "..") == 0);
+            } while (skip || std::strcmp(_entry->d_name, ".") == 0 || std::strcmp(_entry->d_name, "..") == 0);
         }
     }
     path _base;
@@ -4844,6 +5263,7 @@ GHC_INLINE directory_iterator::directory_iterator() noexcept
 {
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE directory_iterator::directory_iterator(const path& p)
     : _impl(new impl(p, directory_options::none))
 {
@@ -4860,6 +5280,7 @@ GHC_INLINE directory_iterator::directory_iterator(const path& p, directory_optio
         throw filesystem_error(detail::systemErrorText(_impl->_ec.value()), p, _impl->_ec);
     }
 }
+#endif
 
 GHC_INLINE directory_iterator::directory_iterator(const path& p, std::error_code& ec) noexcept
     : _impl(new impl(p, directory_options::none))
@@ -4911,6 +5332,7 @@ GHC_INLINE const directory_entry* directory_iterator::operator->() const
     return &_impl->_dir_entry;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE directory_iterator& directory_iterator::operator++()
 {
     std::error_code ec;
@@ -4920,6 +5342,7 @@ GHC_INLINE directory_iterator& directory_iterator::operator++()
     }
     return *this;
 }
+#endif
 
 GHC_INLINE directory_iterator& directory_iterator::increment(std::error_code& ec) noexcept
 {
@@ -4958,6 +5381,7 @@ GHC_INLINE recursive_directory_iterator::recursive_directory_iterator() noexcept
     _impl->_dir_iter_stack.push(directory_iterator());
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE recursive_directory_iterator::recursive_directory_iterator(const path& p)
     : _impl(new recursive_directory_iterator_impl(directory_options::none, true))
 {
@@ -4969,6 +5393,7 @@ GHC_INLINE recursive_directory_iterator::recursive_directory_iterator(const path
 {
     _impl->_dir_iter_stack.push(directory_iterator(p, options));
 }
+#endif
 
 GHC_INLINE recursive_directory_iterator::recursive_directory_iterator(const path& p, directory_options options, std::error_code& ec) noexcept
     : _impl(new recursive_directory_iterator_impl(options, true))
@@ -5033,6 +5458,7 @@ GHC_INLINE recursive_directory_iterator& recursive_directory_iterator::operator=
     return *this;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE recursive_directory_iterator& recursive_directory_iterator::operator++()
 {
     std::error_code ec;
@@ -5042,10 +5468,15 @@ GHC_INLINE recursive_directory_iterator& recursive_directory_iterator::operator+
     }
     return *this;
 }
+#endif
 
 GHC_INLINE recursive_directory_iterator& recursive_directory_iterator::increment(std::error_code& ec) noexcept
 {
-    if (recursion_pending() && is_directory((*this)->status()) && (!is_symlink((*this)->symlink_status()) || (options() & directory_options::follow_directory_symlink) != directory_options::none)) {
+    auto status = (*this)->status(ec);
+    if (ec) return *this;
+    auto symlink_status = (*this)->symlink_status(ec);
+    if (ec) return *this;
+    if (recursion_pending() && is_directory(status) && (!is_symlink(symlink_status) || (options() & directory_options::follow_directory_symlink) != directory_options::none)) {
         _impl->_dir_iter_stack.push(directory_iterator((*this)->path(), _impl->_options, ec));
     }
     else {
@@ -5064,6 +5495,7 @@ GHC_INLINE recursive_directory_iterator& recursive_directory_iterator::increment
     return *this;
 }
 
+#ifdef GHC_WITH_EXCEPTIONS
 GHC_INLINE void recursive_directory_iterator::pop()
 {
     std::error_code ec;
@@ -5072,6 +5504,7 @@ GHC_INLINE void recursive_directory_iterator::pop()
         throw filesystem_error(detail::systemErrorText(ec.value()), _impl->_dir_iter_stack.empty() ? path() : _impl->_dir_iter_stack.top()->path(), ec);
     }
 }
+#endif
 
 GHC_INLINE void recursive_directory_iterator::pop(std::error_code& ec)
 {
@@ -5117,5 +5550,9 @@ GHC_INLINE recursive_directory_iterator end(const recursive_directory_iterator&)
 
 }  // namespace filesystem
 }  // namespace ghc
+
+// cleanup some macros
+#undef GHC_INLINE
+#undef GHC_EXPAND_IMPL
 
 #endif  // GHC_FILESYSTEM_H

@@ -1,15 +1,19 @@
-![Supported Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)
+![Supported Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20FreeBSD-blue.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 [![Build Status](https://travis-ci.org/gulrak/filesystem.svg?branch=master)](https://travis-ci.org/gulrak/filesystem)
-[![Build status](https://ci.appveyor.com/api/projects/status/t07wp3k2cddo0hpo/branch/master?svg=true)](https://ci.appveyor.com/project/gulrak/filesystem)
+[![Build Status](https://ci.appveyor.com/api/projects/status/t07wp3k2cddo0hpo/branch/master?svg=true)](https://ci.appveyor.com/project/gulrak/filesystem)
+[![Build Status](https://api.cirrus-ci.com/github/gulrak/filesystem.svg?branch=master)](https://cirrus-ci.com/github/gulrak/filesystem)
+[![Build Status](https://cloud.drone.io/api/badges/gulrak/filesystem/status.svg?ref=refs/heads/master)](https://cloud.drone.io/gulrak/filesystem)
 [![Coverage Status](https://coveralls.io/repos/github/gulrak/filesystem/badge.svg?branch=master)](https://coveralls.io/github/gulrak/filesystem?branch=master)
-[![Latest Release Tag](https://img.shields.io/github/tag/gulrak/filesystem.svg)](https://github.com/gulrak/filesystem/tree/v1.2.2)
+[![Latest Release Tag](https://img.shields.io/github/tag/gulrak/filesystem.svg)](https://github.com/gulrak/filesystem/tree/v1.3.4)
 
 # Filesystem
 
 This is a header-only single-file std::filesystem compatible helper library,
 based on the C++17 specs, but implemented for C++11, C++14 or C++17 (tightly following
 the C++17 with very few documented exceptions). It is currently tested on
-macOS 10.12/10.14, Windows 10, and Ubuntu 18.04 but should work on other versions too, as long as you have a
+macOS 10.12/10.14/10.15, Windows 10, Ubuntu 18.04, FreeBSD 12 and Alpine ARM/ARM64 Linux
+but should work on other systems too, as long as you have at least a 
 C++11 compatible compiler. It is of course in its own namespace `ghc::filesystem`
 to not interfere with a regular `std::filesystem` should you use it in a mixed C++17
 environment.
@@ -48,13 +52,13 @@ to do with Haskell).
 
 ## Platforms
 
-`ghc::filesystem` is developed on macOS but tested on Windows and Linux.
-It should work on any of these with a C++11-capable compiler. I currently
-don't have a BSD derivate besides macOS, so the preprocessor checks will
-cry out if you try to use it there, but if there is demand, I can try to
-help. Also there are some checks to hopefully better work on Android, but
+`ghc::filesystem` is developed on macOS but CI tested on macOS, Windows,
+Linux and FreeBSD. It should work on any of these with a C++11-capable
+compiler. Also there are some checks to hopefully better work on Android, but
 as I currently don't test with the Android NDK, I wouldn't call it a
-supported platform yet. All in all, I don't see it replacing `std::filesystem`
+supported platform yet, same is valid for using it with Emscripten. It is now
+part of the detected platforms, I fixed the obvious issues and ran some tests with
+it, so it should be fine. All in all, I don't see it replacing `std::filesystem`
 where full C++17 is available, it doesn't try to be a "better"
 `std::filesystem`, just a drop-in if you can't use it (with the exception
 of the UTF-8 preference on Windows).
@@ -62,9 +66,11 @@ of the UTF-8 preference on Windows).
 
 Unit tests are currently run with:
 
-* macOS 10.12: Xcode 9.2 (clang-900.0.39.2), GCC 8.1.0, Clang 7.0.0, macOS 10.14: Xcode 10.2
-* Windows: Visual Studio 2017, Visual Studio 2015, Visual Studio 2019, MingW GCC 6.3 (Win32), GCC 7.2 (Win64)
-* Linux (Ubuntu): GCC (5.5, 6.5, 7.4, 8.1, 8.2), Clang (5.0, 6.0, 7.1, 8.0)
+* macOS 10.12: Xcode 9.2 (clang-900.0.39.2), GCC 9.2, Clang 9.0, macOS 10.13: Xcode 10.1, macOS 10.14: Xcode 11.2, macOS 10.15: Xcode 11.6
+* Windows: Visual Studio 2017, Visual Studio 2015, Visual Studio 2019, MinGW GCC 6.3 (Win32), GCC 7.2 (Win64)
+* Linux (Ubuntu): GCC (5.5, 6.5, 7.4, 8.3, 9.2), Clang (5.0, 6.0, 7.1, 8.0, 9.0)
+* Linux (Alpine ARM/ARM64): GCC 9.2.0
+* FreeBSD: Clang 8.0
 
 
 ## Tests
@@ -100,8 +106,8 @@ in the standard, and there might be issues in these implementations too.
 
 ### Downloads
 
-The latest release version is [v1.2.2](https://github.com/gulrak/filesystem/tree/v1.2.2) and
-source archives can be found [here](https://github.com/gulrak/filesystem/releases/tag/v1.2.2).
+The latest release version is [v1.3.4](https://github.com/gulrak/filesystem/tree/v1.3.4) and
+source archives can be found [here](https://github.com/gulrak/filesystem/releases/tag/v1.3.4).
 
 ### Using it as Single-File-Header
 
@@ -113,20 +119,33 @@ Everything is in the namespace `ghc::filesystem`, so one way to use it only as
 a fallback could be:
 
 ```cpp
-#if defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include) && __has_include(<filesystem>)
+#if defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include)
+#if __has_include(<filesystem>)
+#define GHC_USE_STD_FS
 #include <filesystem>
 namespace fs = std::filesystem;
-#else
+#endif
+#endif
+#ifndef GHC_USE_STD_FS
 #include <ghc/filesystem.hpp>
 namespace fs = ghc::filesystem;
 #endif
 ```
 
+**Note that this code uses a two-stage preprocessor condition because Visual Studio 2015
+doesn't like the `(<...>)` syntax, even if it could cut evaluation early before.**
+
+**Note also, that on MSVC this detection only works starting from version 15.7 on and when setting
+the `/Zc:__cplusplus` compile switch, as the compiler allways reports `199711L`
+without that switch ([see](https://blogs.msdn.microsoft.com/vcblog/2018/04/09/msvc-now-correctly-reports-__cplusplus/)).**
+
 If you want to also use the `fstream` wrapper with `path` support as fallback,
 you might use:
 
 ```cpp
-#if defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include) && __has_include(<filesystem>)
+#if defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include)
+#if __has_include(<filesystem>)
+#define GHC_USE_STD_FS
 #include <filesystem>
 namespace fs {
 using namespace std::filesystem;
@@ -134,7 +153,9 @@ using ifstream = std::ifstream;
 using ofstream = std::ofstream;
 using fstream = std::fstream;
 }
-#else
+#endif
+#endif
+#ifndef GHC_USE_STD_FS
 #include <ghc/filesystem.hpp>
 namespace fs {
 using namespace ghc::filesystem;
@@ -148,12 +169,8 @@ using fstream = ghc::filesystem::fstream;
 Now you have e.g. `fs::ofstream out(somePath);` and it is either the wrapper or
 the C++17 `std::ofstream`.
 
-**Note, that on MSVC this detection only works starting from version 15.7 on and when setting
-the `/Zc:__cplusplus` compile switch, as the compiler allways reports `199711L`
-without that switch ([see](https://blogs.msdn.microsoft.com/vcblog/2018/04/09/msvc-now-correctly-reports-__cplusplus/)).**
-
-Be aware too, as a header-only library, it is not hiding the fact, that it
-uses system includes, so they "pollute" your global namespace.
+**Be aware, as a header-only library, it is not hiding the fact, that it
+uses system includes, so they "pollute" your global namespace.**
 
 :information_source: **Hint:** There is an additional header named `ghc/fs_std.hpp` that implements this
 dynamic selection of a filesystem implementation, that you can include
@@ -181,7 +198,9 @@ If you use the forwarding/implementation approach, you can still use the dynamic
 switching like this:
 
 ```cpp
-#if defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include) && __has_include(<filesystem>)
+#if defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include)
+#if __has_include(<filesystem>)
+#define GHC_USE_STD_FS
 #include <filesystem>
 namespace fs {
 using namespace std::filesystem;
@@ -189,7 +208,9 @@ using ifstream = std::ifstream;
 using ofstream = std::ofstream;
 using fstream = std::fstream;
 }
-#else
+#endif
+#endif
+#ifndef GHC_USE_STD_FS
 #include <ghc/fs-fwd.hpp>
 namespace fs {
 using namespace ghc::filesystem;
@@ -204,8 +225,10 @@ and in the implementation hiding cpp, you might use (before any include that inc
 to take precedence:
 
 ```cpp
-#if !(defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include) && __has_include(<filesystem>))
+#if !(defined(__cplusplus) && __cplusplus >= 201703L && defined(__has_include)
+#if __has_include(<filesystem>))
 #include <ghc/fs_impl.hpp>
+#endif
 #endif
 ```
 
@@ -224,6 +247,15 @@ as a git submodule, add the directory to your `CMakeLists.txt` with
 `add_subdirectory()` and then simply use `target_link_libraries(your-target ghc_filesystem)`
 to ensure correct include path that allow `#include <ghc/filesystem.hpp>`
 to work.
+
+The `CMakeLists.txt` offers a few options to customize its behaviour:
+
+* `GHC_FILESYSTEM_BUILD_TESTING` - Compile tests, default is `OFF` when used as
+  a submodule, else `ON`.
+* `GHC_FILESYSTEM_BUILD_EXAMPLES` - Compile the examples, default is `OFF` when used as
+  a submodule, else `ON`.
+* `GHC_FILESYSTEM_WITH_INSTALL` - Add install target to build, default is `OFF` when used as
+  a submodule, else `ON`.
 
 ### Versioning
 
@@ -455,6 +487,121 @@ to the expected behavior.
 
 ## Release Notes
 
+### [v1.3.4](https://github.com/gulrak/filesystem/releases/tag/v1.3.4)
+
+* Pull request [#69](https://github.com/gulrak/filesystem/pull/69), use `wchar_t` versions of
+  `std::fstream` from `ghc::filesystem::fstream` wrappers on Windows if using GCC with libc++.
+* Bugfix for [#68](https://github.com/gulrak/filesystem/issues/68), better handling of
+  permission issues for directory iterators when using `fs::directory_options::skip_permission_denied`
+  and initial support for compilation with emscripten.
+* Refactoring for [#66](https://github.com/gulrak/filesystem/issues/63), unneeded shared_ptr guards
+  where removed and the file handles closed where needed to avoid unnecessary allocations.
+* Bugfix for [#63](https://github.com/gulrak/filesystem/issues/63), fixed issues on Windows
+  with clang++ and C++17.
+* Pull request [#62](https://github.com/gulrak/filesystem/pull/62), various fixes for
+  better Android support, thanks for the PR
+* Pull request [#61](https://github.com/gulrak/filesystem/pull/61), `ghc::filesystem` now
+  supports use in projects with disabled exceptions. API signatures using exceptions for
+  error handling are not available in this mode, thanks for the PR (this resolves
+  [#60](https://github.com/gulrak/filesystem/issues/60) and
+  [#43](https://github.com/gulrak/filesystem/issues/43))
+  
+### [v1.3.2](https://github.com/gulrak/filesystem/releases/tag/v1.3.2)
+
+* Bugfix for [#58](https://github.com/gulrak/filesystem/issues/58), on MinGW the
+  compilation could fail with an error about an undefined `ERROR_FILE_TOO_LARGE`
+  constant.
+* Bugfix for [#56](https://github.com/gulrak/filesystem/issues/58), `fs::lexically_relative`
+  didn't ignore trailing slash on the base parameter, thanks for PR
+  [#57](https://github.com/gulrak/filesystem/pull/57).
+* Bugfix for [#55](https://github.com/gulrak/filesystem/issues/55), `fs::create_directories`
+  returned `true` when nothing needed to be created, because the directory already existed.
+* Bugfix for [#54](https://github.com/gulrak/filesystem/issues/54), `error_code`
+  was not reset, if cached result was returned.
+* Pull request [#53](https://github.com/gulrak/filesystem/pull/53), fix for wrong
+  handling of leading whitespace when reading `fs::path` from a stream.
+* Pull request [#52](https://github.com/gulrak/filesystem/pull/52), an ARM Linux
+  target is now part of the CI infrastructure with the service of Drone CI.
+* Pull request [#51](https://github.com/gulrak/filesystem/pull/51), FreeBSD is now
+  part of the CI infrastucture with the service of Cirrus CI.
+* Pull request [#50](https://github.com/gulrak/filesystem/pull/50), adaptive cast to
+  `timespec` fields to avoid warnings.
+  
+### [v1.3.0](https://github.com/gulrak/filesystem/releases/tag/v1.3.0)
+
+* **Important: `ghc::filesystem` is re-licensed from BSD-3-Clause to MIT license.** (see
+  [#47](https://github.com/gulrak/filesystem/issues/47))
+* Pull request [#46](https://github.com/gulrak/filesystem/pull/46), suppresses
+  unused parameter warning on Android.
+* Bugfix for [#44](https://github.com/gulrak/filesystem/issues/44), fixes
+  for warnings from newer Xcode versions.
+
+### [v1.2.10](https://github.com/gulrak/filesystem/releases/tag/v1.2.10)
+
+* The Visual Studio 2019 compiler, GCC 9.2 and Clang 9.0 where added to the
+  CI configuration.
+* Bugfix for [#41](https://github.com/gulrak/filesystem/issues/41), `fs::rename`
+  on Windows didn't replace an axisting regular file as required by the standard,
+  but gave an error. New tests and a fix as provided in the issue was implemented.
+* Bugfix for [#39](https://github.com/gulrak/filesystem/issues/39), for the
+  forwarding use via `fs_fwd.hpp` or `fs_std_fwd.hpp` der was a use of
+  `DWORD` in the forwarding part leading to an error if `Windows.h` was not
+  included before the header. The tests were changed to give an error in that
+  case too and the useage of `DWORD` was removed.
+* Bugfix for [#38](https://github.com/gulrak/filesystem/issues/38), casting the
+  return value of `GetProcAddress` gave a warning with `-Wcast-function-type`
+  on MSYS2 and MinGW GCC 9 builds.
+
+### [v1.2.8](https://github.com/gulrak/filesystem/releases/tag/v1.2.8)
+
+* Pull request [#30](https://github.com/gulrak/filesystem/pull/30), the
+  `CMakeLists.txt` will automatically exclude building examples and tests when
+  used as submodule, the configuration options now use a prefixed name to
+  reduce risk of conflicts.
+* Pull request [#24](https://github.com/gulrak/filesystem/pull/24), install
+  target now creates a `ghcFilesystemConfig.cmake` in
+  `${CMAKE_INSTALL_LIBDIR}/cmake/ghcFilesystem` for `find_package` that
+  exports a target as `ghcFilesystem::ghc_filesystem`.
+* Pull request [#31](https://github.com/gulrak/filesystem/pull/31), fixes
+  `error: redundant redeclaration of 'constexpr' static data member` deprecation
+  warning in C++17 mode.
+* Pull request [#32](https://github.com/gulrak/filesystem/pull/32), fixes
+  old-style-cast warnings.
+* Pull request [#34](https://github.com/gulrak/filesystem/pull/34), fixes
+  [TOCTOU](https://en.wikipedia.org/wiki/Time-of-check_to_time-of-use) situation
+  on `fs::create_directories`, thanks for the PR!
+* Feature [#35](https://github.com/gulrak/filesystem/issues/35), new CMake
+  option to add an install target `GHC_FILESYSTEM_WITH_INSTALL` that is
+  defaulted to OFF if `ghc::filesystem` is used via `add_subdirectory`.
+* Bugfix for [#33](https://github.com/gulrak/filesystem/issues/33), fixes
+  an issue with `fs::path::lexically_normal()` that leaves a trailing separator
+  in case of a resulting path ending with `..` as last element.
+* Bugfix for [#36](https://github.com/gulrak/filesystem/issues/36), warings
+  on Xcode 11.2 due to unhelpfull references in path element iteration.
+
+### [v1.2.6](https://github.com/gulrak/filesystem/releases/tag/v1.2.6)
+
+* Pull request [#23](https://github.com/gulrak/filesystem/pull/23), tests and
+  examples can now be disabled in CMake via seting `BUILD_TESTING` and
+  `BUILD_EXAMPLES` to `NO`, `OFF` or `FALSE`.
+* Pull request [#25](https://github.com/gulrak/filesystem/pull/25),
+  missing specialization for construction from `std::string_view` when
+  available was added.
+* Additional test case when `std::string_view` is available.
+* Bugfix for [#27](https://github.com/gulrak/filesystem/issues/27), the
+  `fs::path::preferred_seperator` declaration was not compiling on pre
+  C++17 compilers and no test accessed it, to show the problem. Fixed
+  it to an construction C++11 compiler should accept and added a test that
+  is successful on all combinations tested.
+* Bugfix for [#29](https://github.com/gulrak/filesystem/issues/29), stricter
+  warning settings where chosen and resulting warnings where fixed.
+
+### [v1.2.4](https://github.com/gulrak/filesystem/releases/tag/v1.2.4)
+
+* Enabled stronger warning switches and resulting fixed issues on GCC and MinGW
+* Bugfix for #22, the `fs::copy_options` where not forwarded from `fs::copy` to
+  `fs::copy_file` in one of the cases.
+
 ### [v1.2.2](https://github.com/gulrak/filesystem/releases/tag/v1.2.2)
 
 * Fix for ([#21](https://github.com/gulrak/filesystem/pull/21)), when compiling
@@ -464,8 +611,8 @@ to the expected behavior.
 
 ### [v1.2.0](https://github.com/gulrak/filesystem/releases/tag/v1.2.0)
 
-* Added MingW 32/64 and Visual Studio 2015 builds to the CI configuration.
-* Fixed additional compilation issues on MingW.
+* Added MinGW 32/64 and Visual Studio 2015 builds to the CI configuration.
+* Fixed additional compilation issues on MinGW.
 * Pull request ([#13](https://github.com/gulrak/filesystem/pull/13)), set
   minimum required CMake version to 3.7.2 (as in Debian 8).
 * Pull request ([#14](https://github.com/gulrak/filesystem/pull/14)), added
@@ -539,7 +686,7 @@ to the expected behavior.
 * The `std::basic_string_view` variants of the `fs::path` api are
   now supported when compiling with C++17. 
 * Added CI integration for Travis-CI and Appveyor.
-* Fixed MingW compilation issues.
+* Fixed MinGW compilation issues.
 * Added long filename support for Windows.
 
 ### [v1.0.10](https://github.com/gulrak/filesystem/releases/tag/v1.0.10)
