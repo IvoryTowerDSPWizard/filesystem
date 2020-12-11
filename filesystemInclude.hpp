@@ -8,6 +8,12 @@
 
 #pragma once
 
-#include "include/ghc/filesystem.hpp"
+#define MAE_USE_LIB_FILESYSTEM
 
-namespace fs = ghc::filesystem;
+#ifdef MAE_USE_LIB_FILESYSTEM
+    #include "include/ghc/filesystem.hpp"
+    namespace fs = ghc::filesystem;
+#else
+    #include <filesystem>
+    namespace fs = std::filesystem;
+#endif
